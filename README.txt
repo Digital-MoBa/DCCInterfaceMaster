@@ -1,4 +1,4 @@
-DCCInterfaceMaster (C) Philipp Gahtow
+DCCInterfaceMaster (C) Philipp Gahtow (http://pgahtow.de)
 base on CmdrArduino
 
 ===========
