@@ -3,7 +3,7 @@ base on CmdrArduino
 
 ===========
 
-* modified by Philipp Gahtow 2015-201 digitalmoba@arcor.de
+* modified by Philipp Gahtow 2015-2021 digitalmoba@arcor.de
 * - add a store for active loco, so you can request the actual state
 * - add a store for BasicAccessory states
 * - add a repeat queue for Speed and Function packets
