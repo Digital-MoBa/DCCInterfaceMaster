@@ -14,7 +14,9 @@ base on CmdrArduino
 * - support DCC generation with Timer1 or Timer2
 * - add notify of BasicAccessory even when power is off
 * - change praeambel to 16 Bit for Railcom support
-* - add Railcom hardware support 
+* - add Railcom hardware support
+* - add support for ESP8266 and Arduino DUE
+* - add support for ESP32
 * - optimize Railcom signal timing
 ===========
 
