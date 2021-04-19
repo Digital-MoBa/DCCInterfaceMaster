@@ -188,7 +188,6 @@ class DCCPacketScheduler
     
     //for configuration
     //void setDefaultSpeedSteps(uint8_t new_speed_steps);
-	void setup(uint8_t pin = 6, uint8_t steps = DCC128, uint8_t format = ROCO); 	//for any post-constructor initialization
 	void setup(uint8_t pin, uint8_t pin2, uint8_t steps = DCC128, uint8_t format = ROCO, uint8_t power = ON); 	//for any post-constructor initialization - with RailCom
 	void enable_additional_DCC_output(uint8_t pin);	//extra DCC signal for S88/LocoNet without Shutdown and Railcom
 	void disable_additional_DCC_output(void);

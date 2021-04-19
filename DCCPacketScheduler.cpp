@@ -87,17 +87,6 @@ void DCCPacketScheduler::setDefaultSpeedSteps(uint8_t new_speed_steps)
 */
 
 
-void DCCPacketScheduler::setup(uint8_t pin, uint8_t steps, uint8_t format) //for any post-constructor initialization
-{
-	FSTORAGE.FSTORAGEMODE(EEPROMRailCom,0x00);	//disable RailCom
-	#if defined(ESP8266) || defined(ESP32) //ESP8266 or ESP32
-	FSTORAGE.commit();
-	#endif
-	setup(pin, 0xFF, steps, format);
-	
-	#undef GLOBALRAILCOMREADER	//Abschalten des Railcomdetector!
-}
-
 void DCCPacketScheduler::setup(uint8_t pin, uint8_t pin2, uint8_t steps, uint8_t format, uint8_t power) //for any post-constructor initialization
 {
 	loadEEPROMconfig();	//load the configuration
