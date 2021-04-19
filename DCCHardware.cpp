@@ -44,8 +44,8 @@ volatile DCC_output_state_t DCC_state = dos_idle; //just to start out
 bool POWER_STATUS = false;	//set the railsignal on/off
 uint8_t DCCPin = 6;
 uint8_t DCCPin2 = 0xFF;	// inverted DCC (for RailCom support)
-bool EnableNDCC = false;	//enable inverted DCC Pin
 bool RailCom = false;	//provide a cut out of four bit in preamble
+bool RailComHalfOneBit = false;		//last bit before RC start is only a half one!
 uint8_t DCCS88Pin = 0xFF;	//provide all the time a DCC Signal (no RailCom), even when Railpower is off!
 
 #if defined(__AVR__)
@@ -153,19 +153,27 @@ void DCC_ARM_TC_SIGNAL(void)
 #endif
 */
 
-  oldstate = !oldstate;	//change State
+  if (RailComHalfOneBit) {
+	//deactivate:
+	RailComHalfOneBit = false;
+	DCC_TMR_OUTP_ONE_HALF();	//Produce another halve "one" Bit
+	DCC_OUTPUT1_RC(); //LOW
+	return;	//make the next halve one bit => one bit
+  }
+  else {	
+	oldstate = !oldstate;	//change State
+  }
+  
   
   if (POWER_STATUS) {	//Railpower ON?
 	  if (RailComActiv) {	//Railcom CutOut:
 		//Sendepause beträgt mindestens 448µs oder 4 logische 1 Bits (=464µs).
 		#if defined(__AVR__)  
 			DCC_OUTPUT1_RC(); //LOW
-			if (EnableNDCC)
-			  DCC_OUTPUT2_RC(); //LOW
+  		    DCC_OUTPUT2_RC(); //LOW
 		#else
 			digitalWrite(DCCPin, DCC_OUTPUT1_RC_legacy);	
-			if (EnableNDCC)
-				digitalWrite(DCCPin2, DCC_OUTPUT2_RC_legacy);	
+			digitalWrite(DCCPin2, DCC_OUTPUT2_RC_legacy);	
 		#endif
 	  }
 	  else {
@@ -173,27 +181,24 @@ void DCC_ARM_TC_SIGNAL(void)
 		 if (oldstate == LOW) {
 			#if defined(__AVR__)
 				DCC_OUTPUT1_LOW(); //LOW
-				if (EnableNDCC)
-					DCC_OUTPUT2_LOW(); //HIGH
+				DCC_OUTPUT2_LOW(); //HIGH
 			#else
 				digitalWrite(DCCPin, DCC_OUTPUT1_LOW_legacy);	
-				if (EnableNDCC)
-					digitalWrite(DCCPin2, DCC_OUTPUT2_LOW_legacy);	
+				digitalWrite(DCCPin2, DCC_OUTPUT2_LOW_legacy);	
 			#endif
 		  }
 		  else {
 			#if defined(__AVR__)  
 				DCC_OUTPUT1_HIGH(); //HIGH
-				if (EnableNDCC)
-					DCC_OUTPUT2_HIGH(); //LOW
+				DCC_OUTPUT2_HIGH(); //LOW
 			#else
 				digitalWrite(DCCPin, DCC_OUTPUT1_HIGH_legacy);	
-				if (EnableNDCC)
-					digitalWrite(DCCPin2, DCC_OUTPUT2_HIGH_legacy);	
+				digitalWrite(DCCPin2, DCC_OUTPUT2_HIGH_legacy);	
 			#endif
 		  }
 	  }
   }
+  
   
   //True DCC Output for S88/LocoNet without RailCom cutout!
   if (DCCS88Pin != 0xFF) {
@@ -250,12 +255,18 @@ void DCC_ARM_TC_SIGNAL(void)
         DCC_state = dos_send_preamble; //and fall through to dos_send_preamble
 		
 		//29µs (+/-3µs) nach dem Aussenden des Endebits einer DCC-Nachricht schaltet die Zentrale ab!
-		if ((RailCom == true) && (!current_packet_service)) { //in Service Mode kein RailCom
+		if ((RailCom) && (!current_packet_service)) { //in Service Mode kein RailCom
 			RailComActiv = true;	//start railcom cutout within the next circle
+			RailComHalfOneBit = true;		//next Bit has only halve length
 		}
       /// Preamble: In the process of producing 16 '1's, counter by current_bit_counter; when complete, move to dos_send_bstart or long preamble
       case dos_send_preamble:
-		  DCC_TMR_OUTP_ONE_COUNT();
+		  if (RailComHalfOneBit) {
+			DCC_TMR_OUTP_ONE_HALF();
+		  }
+		  else {
+			  DCC_TMR_OUTP_ONE_COUNT();
+		  }
 		  #if defined(DCCDEBUG)
 			Serial.print("P");	
 		  #endif		
@@ -413,13 +424,11 @@ void setup_DCC_waveform_generator() {
 	d1reg = portOutputRegister(digitalPinToPort(DCCPin));	//PORTB, PORTC, ....
 	DCC_OUTPUT1_OFF(); //LOW
 	
-	if (DCCPin2 != 0xFF) {
-		EnableNDCC = true;
-		pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
-		d2bit = digitalPinToBitMask(DCCPin2);
-		d2reg = portOutputRegister(digitalPinToPort(DCCPin2));
-		DCC_OUTPUT2_OFF(); //LOW
-	}
+    pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
+	d2bit = digitalPinToBitMask(DCCPin2);
+	d2reg = portOutputRegister(digitalPinToPort(DCCPin2));
+	DCC_OUTPUT2_OFF(); //LOW
+
 	
 	if (DCCS88Pin != 0xFF) {
 		pinMode(DCCS88Pin, OUTPUT);		//Set output mode for DCC S88 Pin
@@ -444,11 +453,9 @@ void setup_DCC_waveform_generator() {
 
 	digitalWrite(DCCPin, DCC_OUTPUT1_OFF_legacy);
 
-	if (DCCPin2 != 0xFF) {
-		EnableNDCC = true;
-		pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
-		digitalWrite(DCCPin2, DCC_OUTPUT2_OFF_legacy);
-	}
+	pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
+	digitalWrite(DCCPin2, DCC_OUTPUT2_OFF_legacy);
+	
 	if (DCCS88Pin != 0xFF) {
 		pinMode(DCCS88Pin, OUTPUT);		//Set output mode for DCC S88 Pin
 		digitalWrite(DCCS88Pin, LOW);
