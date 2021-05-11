@@ -3,6 +3,8 @@ base on CmdrArduino
 
 This library create a DCC Signal with RailCom (optional). It can handle two DCC outputs, one with Power feature and 
 one permanent for driving LocoNet Railsync or S88N Raildata line.
+More about the features: http://pgahtow.de/wiki/index.php?title=DCC#Arduino_DCC_Library
+I build up the library to use it with the Arduino Z21pg central station: http://pgahtow.de/wiki/index.php?title=Zentrale
 
 ===========
 
