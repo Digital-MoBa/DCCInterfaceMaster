@@ -18,6 +18,7 @@ base on CmdrArduino
 * - add support for ESP8266 and Arduino DUE
 * - add support for ESP32
 * - optimize Railcom signal timing
+* - fix bug on ESP32 (https://github.com/crosstool-ng/crosstool-ng/issues/1330)
 ===========
 
 
