@@ -4,6 +4,8 @@
 * modified by Philipp Gahtow
 * Copyright digitalmoba@arcor.de, http://pgahtow.de
 *
+*
+*	11.05.21: Update switch/case to if/else because of bug on ESP32
 */
 
 #include "Arduino.h"
@@ -157,7 +159,11 @@ void DCC_ARM_TC_SIGNAL(void)
 	//deactivate:
 	RailComHalfOneBit = false;
 	DCC_TMR_OUTP_ONE_HALF();	//Produce another halve "one" Bit
-	DCC_OUTPUT1_RC(); //LOW
+	#if defined(__AVR__) 
+		DCC_OUTPUT1_RC(); //LOW
+	#else
+		digitalWrite(DCCPin, DCC_OUTPUT1_RC_legacy);
+	#endif
 	return;	//make the next halve one bit => one bit
   }
   else {	
@@ -248,48 +254,54 @@ void DCC_ARM_TC_SIGNAL(void)
   //time to switch things up, maybe. send the current bit in the current packet.
   //if this is the last bit to send, queue up another packet (might be the idle packet).
   else { 
-    switch(DCC_state) //check the state we are in?
-    {
-	  /// Idle: Check if a new packet is ready. If it is, fall through to dos_send_premable. Otherwise just stick a '1' out there.
-      case dos_idle:
-        DCC_state = dos_send_preamble; //and fall through to dos_send_preamble
+  
+    //check the state we are in?
+	//change structure to if/else because ESP32/ESP-IDF, compiler bug in switch/case #1330 - IRAM crash (Cache disabled but cached memory region accessed)
+	  
+    if (DCC_state == dos_idle || DCC_state == dos_send_preamble) {
+		  
+		/// Idle: Check if a new packet is ready. If it is, fall through to dos_send_premable. Otherwise just stick a '1' out there.  
+		if (DCC_state == dos_idle) {
+			DCC_state = dos_send_preamble; //and fall through to dos_send_preamble
 		
-		//29µs (+/-3µs) nach dem Aussenden des Endebits einer DCC-Nachricht schaltet die Zentrale ab!
-		if ((RailCom) && (!current_packet_service)) { //in Service Mode kein RailCom
-			RailComActiv = true;	//start railcom cutout within the next circle
-			RailComHalfOneBit = true;		//next Bit has only halve length
+			//29µs (+/-3µs) nach dem Aussenden des Endebits einer DCC-Nachricht schaltet die Zentrale ab!
+			if ((RailCom) && (!current_packet_service)) { //in Service Mode kein RailCom
+				RailComActiv = true;	//start railcom cutout within the next circle
+				RailComHalfOneBit = true;		//next Bit has only halve length
+			}
 		}
+
       /// Preamble: In the process of producing 16 '1's, counter by current_bit_counter; when complete, move to dos_send_bstart or long preamble
-      case dos_send_preamble:
-		  if (RailComHalfOneBit) {
+		if (RailComHalfOneBit) {
 			DCC_TMR_OUTP_ONE_HALF();
-		  }
-		  else {
-			  DCC_TMR_OUTP_ONE_COUNT();
-		  }
+		}
+		else {
+			DCC_TMR_OUTP_ONE_COUNT();
+		}
 		  #if defined(DCCDEBUG)
 			Serial.print("P");	
 		  #endif		
-          if(!--current_bit_counter) {
+        if(!--current_bit_counter) {
 			if (current_packet_service == true) { //long Preamble in Service Mode
 				current_bit_counter = ADD_LONG_PREAMBLE_LENGTH;	//additional '1's
 				DCC_state = dos_send_longpreamble;
 			}
 			else DCC_state = dos_send_bstart;
-		  }
+		}
 		  
-        break;
-	  /// long Preamble: producess additional '1's for Service Mode data	
-	  case dos_send_longpreamble:
-		  DCC_TMR_OUTP_ONE_COUNT();
-		  #if defined(DCCDEBUG)
-			Serial.print("L");	
-		  #endif	
-		  if (!--current_bit_counter)
+	}
+	/// long Preamble: producess additional '1's for Service Mode data	
+	else if (DCC_state == dos_send_longpreamble) {
+		DCC_TMR_OUTP_ONE_COUNT();
+		#if defined(DCCDEBUG)
+		Serial.print("L");	
+		#endif	
+		if (!--current_bit_counter) {
 			DCC_state = dos_send_bstart;
-		break;
-      /// About to send a data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
-      case dos_send_bstart:
+		}
+	}
+    /// About to send a data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
+	else if (DCC_state == dos_send_bstart) {
 		DCC_TMR_OUTP_ZERO_HIGH();
 		#if defined(DCCDEBUG)
         Serial.print(" 0 ");
@@ -316,15 +328,15 @@ void DCC_ARM_TC_SIGNAL(void)
 		DCC_state = dos_send_uint8_t;
         current_bit_counter = 8;		//reset the counter for bit sending
 		sending_uint8_t_counter	= sending_packet_size;	//reset the counter to the packet_size
-		break;
-      /// About to send next data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
-      case dos_send_next_uint8_t:
+	}
+    /// About to send next data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
+	else if (DCC_state == dos_send_next_uint8_t) {
 		DCC_TMR_OUTP_ZERO_HIGH();
         DCC_state = dos_send_uint8_t;	//continue sending...
         current_bit_counter = 8;	//reset the counter for bit sending
-        break;
-      /// Sending a data uint8_t; current bit is tracked with current_bit_counter, and current uint8_t with sending_uint8_t_counter
-      case dos_send_uint8_t:
+	}
+    /// Sending a data uint8_t; current bit is tracked with current_bit_counter, and current uint8_t with sending_uint8_t_counter
+	else if (DCC_state == dos_send_uint8_t) {
         if(((sending_packet[sending_packet_size-sending_uint8_t_counter])>>(current_bit_counter-1)) & 1) //is current bit a '1'?
         {
 			DCC_TMR_OUTP_ONE_COUNT();
@@ -350,18 +362,18 @@ void DCC_ARM_TC_SIGNAL(void)
             DCC_state = dos_send_next_uint8_t;
           }
         }
-        break;
-      /// Done with the packet. Send out a final '1', then head back to dos_idle to check for a new packet.
-      case dos_end_bit:
+	}
+    /// Done with the packet. Send out a final '1', then head back to dos_idle to check for a new packet.
+	else if (DCC_state == dos_end_bit) {
 		DCC_TMR_OUTP_ONE_COUNT();
 		DCC_state = dos_idle;
 		current_bit_counter = PREAMBLE_LENGTH; //in preparation for a premable...
 		#if defined(DCCDEBUG)
         Serial.println(" 1");
 		#endif
-        break;
-    }
-  }
+	}
+
+  }  //END the pin is high.
   
   #if defined(ESP32)
 	portEXIT_CRITICAL_ISR(&timerMux);
