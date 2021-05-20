@@ -4,8 +4,6 @@
 * modified by Philipp Gahtow
 * Copyright digitalmoba@arcor.de, http://pgahtow.de
 *
-*
-*	11.05.21: Update switch/case to if/else because of bug on ESP32
 */
 
 #include "Arduino.h"
@@ -46,8 +44,8 @@ volatile DCC_output_state_t DCC_state = dos_idle; //just to start out
 bool POWER_STATUS = false;	//set the railsignal on/off
 uint8_t DCCPin = 6;
 uint8_t DCCPin2 = 0xFF;	// inverted DCC (for RailCom support)
+bool EnableNDCC = false;	//enable inverted DCC Pin
 bool RailCom = false;	//provide a cut out of four bit in preamble
-bool RailComHalfOneBit = false;		//last bit before RC start is only a half one!
 uint8_t DCCS88Pin = 0xFF;	//provide all the time a DCC Signal (no RailCom), even when Railpower is off!
 
 #if defined(__AVR__)
@@ -155,31 +153,19 @@ void DCC_ARM_TC_SIGNAL(void)
 #endif
 */
 
-  if (RailComHalfOneBit) {
-	//deactivate:
-	RailComHalfOneBit = false;
-	DCC_TMR_OUTP_ONE_HALF();	//Produce another halve "one" Bit
-	#if defined(__AVR__) 
-		DCC_OUTPUT1_RC(); //LOW
-	#else
-		digitalWrite(DCCPin, DCC_OUTPUT1_RC_legacy);
-	#endif
-	return;	//make the next halve one bit => one bit
-  }
-  else {	
-	oldstate = !oldstate;	//change State
-  }
-  
+  oldstate = !oldstate;	//change State
   
   if (POWER_STATUS) {	//Railpower ON?
 	  if (RailComActiv) {	//Railcom CutOut:
 		//Sendepause beträgt mindestens 448µs oder 4 logische 1 Bits (=464µs).
 		#if defined(__AVR__)  
 			DCC_OUTPUT1_RC(); //LOW
-  		    DCC_OUTPUT2_RC(); //LOW
+			if (EnableNDCC)
+			  DCC_OUTPUT2_RC(); //LOW
 		#else
 			digitalWrite(DCCPin, DCC_OUTPUT1_RC_legacy);	
-			digitalWrite(DCCPin2, DCC_OUTPUT2_RC_legacy);	
+			if (EnableNDCC)
+				digitalWrite(DCCPin2, DCC_OUTPUT2_RC_legacy);	
 		#endif
 	  }
 	  else {
@@ -187,24 +173,27 @@ void DCC_ARM_TC_SIGNAL(void)
 		 if (oldstate == LOW) {
 			#if defined(__AVR__)
 				DCC_OUTPUT1_LOW(); //LOW
-				DCC_OUTPUT2_LOW(); //HIGH
+				if (EnableNDCC)
+					DCC_OUTPUT2_LOW(); //HIGH
 			#else
 				digitalWrite(DCCPin, DCC_OUTPUT1_LOW_legacy);	
-				digitalWrite(DCCPin2, DCC_OUTPUT2_LOW_legacy);	
+				if (EnableNDCC)
+					digitalWrite(DCCPin2, DCC_OUTPUT2_LOW_legacy);	
 			#endif
 		  }
 		  else {
 			#if defined(__AVR__)  
 				DCC_OUTPUT1_HIGH(); //HIGH
-				DCC_OUTPUT2_HIGH(); //LOW
+				if (EnableNDCC)
+					DCC_OUTPUT2_HIGH(); //LOW
 			#else
 				digitalWrite(DCCPin, DCC_OUTPUT1_HIGH_legacy);	
-				digitalWrite(DCCPin2, DCC_OUTPUT2_HIGH_legacy);	
+				if (EnableNDCC)
+					digitalWrite(DCCPin2, DCC_OUTPUT2_HIGH_legacy);	
 			#endif
 		  }
 	  }
   }
-  
   
   //True DCC Output for S88/LocoNet without RailCom cutout!
   if (DCCS88Pin != 0xFF) {
@@ -254,54 +243,42 @@ void DCC_ARM_TC_SIGNAL(void)
   //time to switch things up, maybe. send the current bit in the current packet.
   //if this is the last bit to send, queue up another packet (might be the idle packet).
   else { 
-  
-    //check the state we are in?
-	//change structure to if/else because ESP32/ESP-IDF, compiler bug in switch/case #1330 - IRAM crash (Cache disabled but cached memory region accessed)
-	  
-    if (DCC_state == dos_idle || DCC_state == dos_send_preamble) {
-		  
-		/// Idle: Check if a new packet is ready. If it is, fall through to dos_send_premable. Otherwise just stick a '1' out there.  
-		if (DCC_state == dos_idle) {
-			DCC_state = dos_send_preamble; //and fall through to dos_send_preamble
+    switch(DCC_state) //check the state we are in?
+    {
+	  /// Idle: Check if a new packet is ready. If it is, fall through to dos_send_premable. Otherwise just stick a '1' out there.
+      case dos_idle:
+        DCC_state = dos_send_preamble; //and fall through to dos_send_preamble
 		
-			//29µs (+/-3µs) nach dem Aussenden des Endebits einer DCC-Nachricht schaltet die Zentrale ab!
-			if ((RailCom) && (!current_packet_service)) { //in Service Mode kein RailCom
-				RailComActiv = true;	//start railcom cutout within the next circle
-				RailComHalfOneBit = true;		//next Bit has only halve length
-			}
+		//29µs (+/-3µs) nach dem Aussenden des Endebits einer DCC-Nachricht schaltet die Zentrale ab!
+		if ((RailCom == true) && (!current_packet_service)) { //in Service Mode kein RailCom
+			RailComActiv = true;	//start railcom cutout within the next circle
 		}
-
       /// Preamble: In the process of producing 16 '1's, counter by current_bit_counter; when complete, move to dos_send_bstart or long preamble
-		if (RailComHalfOneBit) {
-			DCC_TMR_OUTP_ONE_HALF();
-		}
-		else {
-			DCC_TMR_OUTP_ONE_COUNT();
-		}
+      case dos_send_preamble:
+		  DCC_TMR_OUTP_ONE_COUNT();
 		  #if defined(DCCDEBUG)
 			Serial.print("P");	
 		  #endif		
-        if(!--current_bit_counter) {
+          if(!--current_bit_counter) {
 			if (current_packet_service == true) { //long Preamble in Service Mode
 				current_bit_counter = ADD_LONG_PREAMBLE_LENGTH;	//additional '1's
 				DCC_state = dos_send_longpreamble;
 			}
 			else DCC_state = dos_send_bstart;
-		}
+		  }
 		  
-	}
-	/// long Preamble: producess additional '1's for Service Mode data	
-	else if (DCC_state == dos_send_longpreamble) {
-		DCC_TMR_OUTP_ONE_COUNT();
-		#if defined(DCCDEBUG)
-		Serial.print("L");	
-		#endif	
-		if (!--current_bit_counter) {
+        break;
+	  /// long Preamble: producess additional '1's for Service Mode data	
+	  case dos_send_longpreamble:
+		  DCC_TMR_OUTP_ONE_COUNT();
+		  #if defined(DCCDEBUG)
+			Serial.print("L");	
+		  #endif	
+		  if (!--current_bit_counter)
 			DCC_state = dos_send_bstart;
-		}
-	}
-    /// About to send a data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
-	else if (DCC_state == dos_send_bstart) {
+		break;
+      /// About to send a data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
+      case dos_send_bstart:
 		DCC_TMR_OUTP_ZERO_HIGH();
 		#if defined(DCCDEBUG)
         Serial.print(" 0 ");
@@ -328,15 +305,15 @@ void DCC_ARM_TC_SIGNAL(void)
 		DCC_state = dos_send_uint8_t;
         current_bit_counter = 8;		//reset the counter for bit sending
 		sending_uint8_t_counter	= sending_packet_size;	//reset the counter to the packet_size
-	}
-    /// About to send next data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
-	else if (DCC_state == dos_send_next_uint8_t) {
+		break;
+      /// About to send next data uint8_t, but have to peceed the data with a '0'. Send that '0', then move to dos_send_uint8_t
+      case dos_send_next_uint8_t:
 		DCC_TMR_OUTP_ZERO_HIGH();
         DCC_state = dos_send_uint8_t;	//continue sending...
         current_bit_counter = 8;	//reset the counter for bit sending
-	}
-    /// Sending a data uint8_t; current bit is tracked with current_bit_counter, and current uint8_t with sending_uint8_t_counter
-	else if (DCC_state == dos_send_uint8_t) {
+        break;
+      /// Sending a data uint8_t; current bit is tracked with current_bit_counter, and current uint8_t with sending_uint8_t_counter
+      case dos_send_uint8_t:
         if(((sending_packet[sending_packet_size-sending_uint8_t_counter])>>(current_bit_counter-1)) & 1) //is current bit a '1'?
         {
 			DCC_TMR_OUTP_ONE_COUNT();
@@ -362,18 +339,18 @@ void DCC_ARM_TC_SIGNAL(void)
             DCC_state = dos_send_next_uint8_t;
           }
         }
-	}
-    /// Done with the packet. Send out a final '1', then head back to dos_idle to check for a new packet.
-	else if (DCC_state == dos_end_bit) {
+        break;
+      /// Done with the packet. Send out a final '1', then head back to dos_idle to check for a new packet.
+      case dos_end_bit:
 		DCC_TMR_OUTP_ONE_COUNT();
 		DCC_state = dos_idle;
 		current_bit_counter = PREAMBLE_LENGTH; //in preparation for a premable...
 		#if defined(DCCDEBUG)
         Serial.println(" 1");
 		#endif
-	}
-
-  }  //END the pin is high.
+        break;
+    }
+  }
   
   #if defined(ESP32)
 	portEXIT_CRITICAL_ISR(&timerMux);
@@ -436,11 +413,13 @@ void setup_DCC_waveform_generator() {
 	d1reg = portOutputRegister(digitalPinToPort(DCCPin));	//PORTB, PORTC, ....
 	DCC_OUTPUT1_OFF(); //LOW
 	
-    pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
-	d2bit = digitalPinToBitMask(DCCPin2);
-	d2reg = portOutputRegister(digitalPinToPort(DCCPin2));
-	DCC_OUTPUT2_OFF(); //LOW
-
+	if (DCCPin2 != 0xFF) {
+		EnableNDCC = true;
+		pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
+		d2bit = digitalPinToBitMask(DCCPin2);
+		d2reg = portOutputRegister(digitalPinToPort(DCCPin2));
+		DCC_OUTPUT2_OFF(); //LOW
+	}
 	
 	if (DCCS88Pin != 0xFF) {
 		pinMode(DCCS88Pin, OUTPUT);		//Set output mode for DCC S88 Pin
@@ -465,9 +444,11 @@ void setup_DCC_waveform_generator() {
 
 	digitalWrite(DCCPin, DCC_OUTPUT1_OFF_legacy);
 
-	pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
-	digitalWrite(DCCPin2, DCC_OUTPUT2_OFF_legacy);
-	
+	if (DCCPin2 != 0xFF) {
+		EnableNDCC = true;
+		pinMode(DCCPin2, OUTPUT);		//Set output mode for DCC Pin2
+		digitalWrite(DCCPin2, DCC_OUTPUT2_OFF_legacy);
+	}
 	if (DCCS88Pin != 0xFF) {
 		pinMode(DCCS88Pin, OUTPUT);		//Set output mode for DCC S88 Pin
 		digitalWrite(DCCS88Pin, LOW);

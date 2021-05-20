@@ -93,12 +93,7 @@ void DCCPacketScheduler::setup(uint8_t pin, uint8_t pin2, uint8_t steps, uint8_t
 	
 	DCCPin = pin;	//set DCC Waveform pin
 	DCCPin2 = pin2;	//set inverted DCC Waveform pin2
-	
-	#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) //Arduino MEGA
-	DCCS88Pin = 11;		//default PIN for S88 DCC on MEGA
-	#elif defined(ESP32)
-	DCCS88Pin = 16;		//default GPIO16
-	#endif
+	DCCS88Pin = 0xFF;	//disable per default
 	
 	setup_DCC_waveform_generator();	//Timer neu configurieren
 	
