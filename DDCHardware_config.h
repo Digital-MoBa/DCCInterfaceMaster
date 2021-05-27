@@ -31,27 +31,43 @@ Dauer des Teil-Nullbits: t ≥ 100 µs, normal: 116µs
 //DCC truth table:
 
 //OFF:
+#if defined(__AVR__)
 #define DCC_OUTPUT1_OFF() 			{*d1reg &= ~d1bit;}		//LOW
+#endif
 #define DCC_OUTPUT1_OFF_legacy	 	LOW
+#if defined(__AVR__)
 #define DCC_OUTPUT2_OFF() 			{*d2reg &= ~d2bit;}		//LOW 
+#endif
 #define DCC_OUTPUT2_OFF_legacy	 	LOW
 
 //RailCom:
+#if defined(__AVR__)
 #define DCC_OUTPUT1_RC() 			{*d1reg &= ~d1bit;}		 //LOW 
+#endif
 #define DCC_OUTPUT1_RC_legacy	 	LOW
+#if defined(__AVR__)
 #define DCC_OUTPUT2_RC() 			{*d2reg &= ~d2bit;}		//LOW
+#endif
 #define DCC_OUTPUT2_RC_legacy	 	LOW
 
 //DCC LOW:
+#if defined(__AVR__)
 #define DCC_OUTPUT1_LOW() 			{*d1reg &= ~d1bit;}	  //LOW
+#endif
 #define DCC_OUTPUT1_LOW_legacy	 	LOW
+#if defined(__AVR__)
 #define DCC_OUTPUT2_LOW() 			{*d2reg |= d2bit;}	 //HIGH
+#endif
 #define DCC_OUTPUT2_LOW_legacy	 	HIGH
 
 //DCC HIGH:
+#if defined(__AVR__)
 #define DCC_OUTPUT1_HIGH() 			{*d1reg |= d1bit;}	 //HIGH
+#endif
 #define DCC_OUTPUT1_HIGH_legacy	 	HIGH
+#if defined(__AVR__)
 #define DCC_OUTPUT2_HIGH() 			{*d2reg &= ~d2bit;}	 //LOW
+#endif
 #define DCC_OUTPUT2_HIGH_legacy	 	LOW
 
 /******************************************/
