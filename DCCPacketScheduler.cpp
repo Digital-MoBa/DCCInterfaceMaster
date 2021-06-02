@@ -767,8 +767,6 @@ bool DCCPacketScheduler::opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_
 
 	//return low_priority_queue.insertPacket(&p);	//Standard
 
-	//setpower(SERVICE, true);
-
 	//opsDecoderReset();	//send first a Reset Packet
 	return ops_programmming_queue.insertPacket(&p);
 	//return e_stop_queue.insertPacket(&p);
@@ -798,8 +796,6 @@ bool DCCPacketScheduler::opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t B
 	p.setRepeat(ProgRepeat);
 
 	//return low_priority_queue.insertPacket(&p);	//Standard
-
-	//setpower(SERVICE, true);
 
 	//opsDecoderReset();	//send first a Reset Packet
 	return ops_programmming_queue.insertPacket(&p);
