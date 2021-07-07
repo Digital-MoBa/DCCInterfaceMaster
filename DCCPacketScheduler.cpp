@@ -1026,14 +1026,14 @@ void DCCPacketScheduler::update(void) {
 			current_packet_service = false;
 		}
 		
-		#if defined(ESP32)
-		portENTER_CRITICAL_ISR(&timerMux);
-		#endif
+		//#if defined(ESP32)
+		//portENTER_CRITICAL_ISR(&timerMux);
+		//#endif
 		//Ready: Next Packet for the ISR!
 		get_next_packet = false;
-		#if defined(ESP32)
-		portEXIT_CRITICAL_ISR(&timerMux);
-		#endif
+		//#if defined(ESP32)
+		//portEXIT_CRITICAL_ISR(&timerMux);
+		//#endif
 	}
 }
 
