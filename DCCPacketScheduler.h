@@ -66,6 +66,7 @@
  * - add a DCC timer interrupt start/stop function because of problems crashing ESP32 and ESP8266 when EEPROM.commit runs
  * - add EEPROM.commit statement for ESP32 and ESP8266
  * - optimize CV# read with new detection time
+ * - add NVS to store EEPROM data on ESP32
 	
  */
 
@@ -191,6 +192,7 @@ class DCCPacketScheduler
 	void setup(uint8_t pin, uint8_t pin2, uint8_t steps = DCC128, uint8_t format = ROCO, uint8_t power = ON); 	//for any post-constructor initialization - with RailCom
 	void enable_additional_DCC_output(uint8_t pin);	//extra DCC signal for S88/LocoNet without Shutdown and Railcom
 	void disable_additional_DCC_output(void);
+	
 	void loadEEPROMconfig(void);	//Load Configuration from EEPROM
 
 	//more specific functions:

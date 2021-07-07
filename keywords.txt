@@ -6,12 +6,12 @@ setup			KEYWORD2
 enable_additional_DCC_output	KEYWORD2
 disable_additional_DCC_output	KEYWORD2
 loadEEPROMconfig	KEYWORD2			
-setPower		KEYWORD2		
-getPower		KEYWORD2
-setRailcom		KEYWORD2
+setpower		KEYWORD2		
+getpower		KEYWORD2
 setCurrentLoadPin	KEYWORD2		
-setRailCom		KEYWORD2
-getRailCom		KEYWORD2
+setrailcom		KEYWORD2
+getrailcom		KEYWORD2
+eStop			KEYWORD2
 setSpeed		KEYWORD2
 setSpeed14		KEYWORD2
 setSpeed28		KEYWORD2
@@ -34,7 +34,6 @@ opsProgramCV		KEYWORD2
 opsPOMwriteBit		KEYWORD2
 opsPOMreadCV		KEYWORD2
 opsDecoderReset		KEYWORD2
-eStop			KEYWORD2
 update			KEYWORD2
 notifyLokAll		KEYWORD2
 notifyTrnt		KEYWORD2

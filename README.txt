@@ -1,4 +1,4 @@
-DDCCInterfaceMaster (C) Philipp Gahtow
+DCCInterfaceMaster (C) Philipp Gahtow
 base on CmdrArduino
 
 This library create a DCC Signal with RailCom (optional). It can handle two DCC outputs, one with Power feature and 

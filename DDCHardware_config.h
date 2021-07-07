@@ -111,6 +111,7 @@ Dauer des Teil-Nullbits: t ≥ 100 µs, normal: 116µs
 #define one_count 58		// 290 - Calls every 58µs
 #define zero_high_count	100	// 500 - Calls every 100µs
 #define zero_low_count	100	// Calls every 100µs
+#define DCC_ESP_TIMER_ID	0		//the Timer number from 0 to 3
 #define DCC_ESP_TIMER_PRESCALE	80		//prescale the value of the time divider
 #define DCC_ESP_TIMER_FLAG		true	//flag true to count on the rising edge, false to count on the falling edge
 #define DCC_TMR_OUTP_ONE_HALF() {timerAlarmWrite(timer, half_one_count, true); last_timer = half_one_count;}	

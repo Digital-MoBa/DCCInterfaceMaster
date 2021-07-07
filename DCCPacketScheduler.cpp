@@ -20,15 +20,22 @@
 DueFlashStorage DueFlash;
 #define FSTORAGE 	DueFlash
 #define FSTORAGEMODE write
+
 #elif defined(ESP8266) || defined(ESP32) //ESP8266 or ESP32
-#include <EEPROM.h>
-#define FSTORAGE 	EEPROM
+#include "z21nvs.h"
+z21nvsClass EEPROMDCC;
+#define FSTORAGE EEPROMDCC
 #define FSTORAGEMODE write
+
 #else
 // AVR based Boards follows
 #include <EEPROM.h>
 #define FSTORAGE 	EEPROM
 #define FSTORAGEMODE update
+#endif
+
+#if defined(ESP32)
+extern portMUX_TYPE timerMux;	
 #endif
 
 extern volatile bool get_next_packet; 
@@ -78,15 +85,6 @@ DCCPacketScheduler::DCCPacketScheduler(void) : /*default_speed_steps(128),*/ /*l
   ops_programmming_queue.setup(PROG_QUEUE_SIZE); //for CV programming only
 }
 
-/*
-//for configuration
-void DCCPacketScheduler::setDefaultSpeedSteps(uint8_t new_speed_steps)
-{
-  default_speed_steps = new_speed_steps;
-}
-*/
-
-
 void DCCPacketScheduler::setup(uint8_t pin, uint8_t pin2, uint8_t steps, uint8_t format, uint8_t power) //for any post-constructor initialization
 {
 	loadEEPROMconfig();	//load the configuration
@@ -97,8 +95,6 @@ void DCCPacketScheduler::setup(uint8_t pin, uint8_t pin2, uint8_t steps, uint8_t
 	
 	setup_DCC_waveform_generator();	//Timer neu configurieren
 	
-	DCC_waveform_generation_hasshin();	//Enable Interrupt
-		
 	#if defined(__SAM3X8E__)
 	TC_Start(DCC_ARM_TC_TIMER, DCC_ARM_TC_CHANNEL);
 	#elif defined(ESP8266) 	//ESP8266
@@ -163,19 +159,9 @@ void DCCPacketScheduler::setpower(uint8_t state, bool notify)
 	if (railpower != state) {
 		railpower = state;	//save the state of the railpower
 		if (state == OFF || state == SHORT) {
-			/*
-			#if defined(__SAM3X8E__)
-			TC_Stop(DCC_ARM_TC_TIMER, DCC_ARM_TC_CHANNEL);
-			#elif defined(ESP8266) || defined(ESP32)	//ESP8266 or ESP32
-			timer1_disable();
-			#else
-			DCC_TMR_CONTROL_REG = 0;     // Stop Timer 
-			#endif
-			*/
+
 			DCC_stop_output_signal();	//RailPower-Signal generate OFF
 			
-			digitalWrite(DCCPin, LOW);	//DCC output pin inaktiv
-			digitalWrite(DCCPin2, LOW);	//DCC output pin inaktiv
 		}
 		else {
 			DCC_run_output_signal(); 	//generate RailPower-Signal
@@ -1039,8 +1025,15 @@ void DCCPacketScheduler::update(void) {
 		else {
 			current_packet_service = false;
 		}
+		
+		#if defined(ESP32)
+		portENTER_CRITICAL_ISR(&timerMux);
+		#endif
 		//Ready: Next Packet for the ISR!
 		get_next_packet = false;
+		#if defined(ESP32)
+		portEXIT_CRITICAL_ISR(&timerMux);
+		#endif
 	}
 }
 

@@ -76,10 +76,6 @@ volatile uint8_t current_packet_size = 0;
 volatile uint8_t sending_uint8_t_counter = 0;
 /// How many bits remain in the current data uint8_t/preamble before changing states?
 volatile uint8_t current_bit_counter = PREAMBLE_LENGTH; //init to 16 1's for the preamble
-/// A fixed-content packet to send when idle
-//uint8_t DCC_Idle_Packet[3] = {255,0,255};
-/// A fixed-content packet to send to reset all decoders on layout
-//uint8_t DCC_Reset_Packet[3] = {0,0,0};
 
 /// Timer1 TOP values for one and zero
 /** S 9.1 A specifies that '1's are represented by a square wave with a half-period of 58us (valid range: 55-61us)
@@ -213,6 +209,7 @@ void DCC_ARM_TC_SIGNAL(void)
 	  }
   }
   
+ 
   //only repeat the last output:
   if (oldstate == LOW)
   {
@@ -230,6 +227,7 @@ void DCC_ARM_TC_SIGNAL(void)
 	  else {
 		DCC_TMR_OUTP_ONE_COUNT();
 	  }
+	  
 	#endif
 	
 	
@@ -257,7 +255,7 @@ void DCC_ARM_TC_SIGNAL(void)
       case dos_send_preamble:
 		  DCC_TMR_OUTP_ONE_COUNT();
 		  #if defined(DCCDEBUG)
-			Serial.print("P");	
+			Serial.print("Ä");	
 		  #endif		
           if(!--current_bit_counter) {
 			if (current_packet_service == true) { //long Preamble in Service Mode
@@ -357,26 +355,13 @@ void DCC_ARM_TC_SIGNAL(void)
   #endif
 }
 
-void DCC_waveform_generation_hasshin()
-{
-	#if defined(__AVR__)
-	//enable match interrupt
-	DCC_TMR_MATCH_INT();
-	
-	#elif defined(ESP8266) //ESP8266
-	timer1_attachInterrupt(onTimerISR);
-	
-	#elif defined(ESP32)	//ESP32
-	timerAlarmEnable(timer);
-	
-	#else	//Arduino DUE
-	NVIC_EnableIRQ(DCC_ARM_MATCH_INT);	
-	#endif
-}
-
 void DCC_stop_output_signal()
 {
 	POWER_STATUS = false;
+	digitalWrite(DCCPin, LOW);	//DCC output pin inaktiv
+	if (DCCPin2 != 0xFF) {
+		digitalWrite(DCCPin2, LOW);	//DCC output pin inaktiv
+	}
 }
 
 void DCC_run_output_signal()
@@ -458,13 +443,11 @@ void setup_DCC_waveform_generator() {
 	#if defined(ESP32)			//ESP32 Modul
 	/* Use 1st timer of 4 */
 	/* 1 tick take 1/(80MHZ/80) = 1us so we set divider 80 and count up */
-	timer = timerBegin(2, DCC_ESP_TIMER_PRESCALE, DCC_ESP_TIMER_FLAG);
+	timer = timerBegin(DCC_ESP_TIMER_ID, DCC_ESP_TIMER_PRESCALE, DCC_ESP_TIMER_FLAG);
 	
 	/* Set alarm to call onTimer function every second 1 tick is 1us => 1 second is 1000000us */
 	/* Repeat the alarm (third parameter) */
 	timerAttachInterrupt(timer, &onTimerISR, true);
-	
-	timerAlarmWrite(timer, 58, true);
 	
 	DCC_TMR_OUTP_ONE_COUNT(); //start output "1"
 
@@ -503,5 +486,22 @@ void setup_DCC_waveform_generator() {
 	#endif
 	
 	/******************************************/
+	#endif
+	
+	
+	//Enable the Interrupt:
+	
+	#if defined(__AVR__)
+	//enable match interrupt
+	DCC_TMR_MATCH_INT();
+	
+	#elif defined(ESP8266) //ESP8266
+	timer1_attachInterrupt(onTimerISR);
+	
+	#elif defined(ESP32)	//ESP32
+	timerAlarmEnable(timer);
+	
+	#else	//Arduino DUE
+	NVIC_EnableIRQ(DCC_ARM_MATCH_INT);	
 	#endif
 }
