@@ -588,7 +588,7 @@ bool DCCPacketScheduler::setBasicAccessoryPos(uint16_t address, bool state, bool
 	p.setRepeat(OTHER_REPEAT);
 
 	if (notifyTrnt)
-		notifyTrnt(address, state);
+		notifyTrnt(address, state, activ);
 
 	bitWrite(BasicAccessory[address / 8], address % 8, state);	//pro SLOT immer 8 Zustände speichern!
 

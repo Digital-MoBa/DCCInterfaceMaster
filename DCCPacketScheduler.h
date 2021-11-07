@@ -1,5 +1,5 @@
 /*
- * DCC Waveform Generator v5.0
+ * DCC Waveform Generator v5.5
  *
  * Author: Philipp Gahtow digitalmoba@arcor.de
  *		   Don Goodman-Wilson dgoodman@artificial-science.org
@@ -67,6 +67,7 @@
  * - add EEPROM.commit statement for ESP32 and ESP8266
  * - optimize CV# read with new detection time
  * - add NVS to store EEPROM data on ESP32
+ * - add active label to notifyTrnt message
 	
  */
 
@@ -313,7 +314,7 @@ extern "C" {
 #endif
 
 	extern void notifyLokAll(uint16_t Adr, uint8_t Steps, uint8_t Speed, uint8_t F0, uint8_t F1, uint8_t F2, uint8_t F3) __attribute__((weak));
-	extern void notifyTrnt(uint16_t Adr, bool State) __attribute__((weak));
+	extern void notifyTrnt(uint16_t Adr, bool State, bool active) __attribute__((weak));
 	
 	extern void notifyCVVerify(uint16_t CV, uint8_t value) __attribute__((weak));
 	
