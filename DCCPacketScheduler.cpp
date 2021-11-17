@@ -21,7 +21,7 @@ DueFlashStorage DueFlash;
 #define FSTORAGE 	DueFlash
 #define FSTORAGEMODE write
 
-#elif defined(ESP8266) || defined(ESP32) //ESP8266 or ESP32
+#elif defined(ESP32) //ESP32 only!
 #include "z21nvs.h"
 z21nvsClass EEPROMDCC;
 #define FSTORAGE EEPROMDCC
@@ -31,7 +31,11 @@ z21nvsClass EEPROMDCC;
 // AVR based Boards follows
 #include <EEPROM.h>
 #define FSTORAGE 	EEPROM
+#if defined(ESP8266)
+#define FSTORAGEMODE write
+#else
 #define FSTORAGEMODE update
+#endif
 #endif
 
 #if defined(ESP32)
@@ -109,7 +113,7 @@ void DCCPacketScheduler::setup(uint8_t pin, uint8_t pin2, uint8_t steps, uint8_t
 
 	//Following RP 9.2.4, begin by putting 20 reset packets and 10 idle packets on the rails.
 	//reset packet: address 0x00, data 0x00, XOR 0x00; S 9.2 line 75
-	opsDecoderReset(20);	//send first a Reset Packet
+	opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
 
 	//idle packet: address 0xFF, data 0x00, XOR 0xFF; S 9.2 line 90
 	//Automatically send idle packet until first action!
@@ -138,10 +142,10 @@ void DCCPacketScheduler::loadEEPROMconfig(void)
 		FSTORAGE.FSTORAGEMODE(EEPROMRailCom,0x01);	//Default activ
 	RailCom = FSTORAGE.read(EEPROMRailCom);	//define if railcom cutout is active	
 	
-	if ((FSTORAGE.read(EEPROMRSTsRepeat) > 64) | (FSTORAGE.read(EEPROMRSTcRepeat) > 64)) {
-		FSTORAGE.FSTORAGEMODE(EEPROMProgRepeat,OPS_MODE_PROGRAMMING_REPEAT);
-		FSTORAGE.FSTORAGEMODE(EEPROMRSTsRepeat,RESET_START_REPEAT);
-		FSTORAGE.FSTORAGEMODE(EEPROMRSTcRepeat,RESET_CONT_REPEAT);
+	if ((FSTORAGE.read(EEPROMProgRepeat) > 64) | (FSTORAGE.read(EEPROMRSTcRepeat) > 64)) {
+		FSTORAGE.FSTORAGEMODE(EEPROMProgRepeat,OPS_MODE_PROGRAMMING_REPEAT);	//range 7-64
+		FSTORAGE.FSTORAGEMODE(EEPROMRSTsRepeat,RESET_START_REPEAT);		//range 25-255
+		FSTORAGE.FSTORAGEMODE(EEPROMRSTcRepeat,RESET_CONT_REPEAT);		//range 6-64
 	}
 	
 	#if defined(ESP8266) || defined(ESP32) //ESP8266 or ESP32
@@ -611,12 +615,12 @@ bool DCCPacketScheduler::opsProgDirectCV(uint16_t CV, uint8_t CV_data)
 	//Long-preamble   0  0111CCAA  0  AAAAAAAA  0  DDDDDDDD  0  EEEEEEEE  1 
 	//CC=10 Bit Manipulation
 	//CC=01 Verify byte
-	//CC=11 Write byte 
+	//CC=11 Write byte 	<--
 	
 	//check if CV# is between 0 - 1023
 	if (CV > 1023) {
 		if (notifyCVNack)
-			notifyCVNack();
+			notifyCVNack(CV);
 		return false;
 	}
 	
@@ -628,8 +632,8 @@ bool DCCPacketScheduler::opsProgDirectCV(uint16_t CV, uint8_t CV_data)
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
 	p.setRepeat(ProgRepeat);
 
-	if (railpower != SERVICE)	//time to wait for the relais!
-		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	//if (railpower != SERVICE)	//time to wait for the relais!
+		//opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
 	setpower(SERVICE, true);
 	current_cv_bit = 0xFF; //write the byte!
 	current_ack_read = false;
@@ -637,7 +641,7 @@ bool DCCPacketScheduler::opsProgDirectCV(uint16_t CV, uint8_t CV_data)
 	current_cv = CV;
 	current_cv_value = CV_data;
 
-	//-------opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	opsDecoderReset(3);	//send first a Reset Packet
 	ops_programmming_queue.insertPacket(&p);
 	//-----opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 	return opsVerifyDirectCV(current_cv,current_cv_value); //verify bit read
@@ -648,13 +652,13 @@ bool DCCPacketScheduler::opsVerifyDirectCV(uint16_t CV, uint8_t CV_data)
 	//for CV#1 is the Adress 0
 	//Long-preamble   0  0111CCAA  0  AAAAAAAA  0  DDDDDDDD  0  EEEEEEEE  1 
 	//CC=10 Bit Manipulation
-	//CC=01 Verify byte
+	//CC=01 Verify byte		<--
 	//CC=11 Write byte 
 	
 	//check if CV# is between 0 - 1023
 	if (CV > 1023) {
 		if (notifyCVNack)
-			notifyCVNack();
+			notifyCVNack(CV);
 		return false;
 	}
 	
@@ -666,8 +670,10 @@ bool DCCPacketScheduler::opsVerifyDirectCV(uint16_t CV, uint8_t CV_data)
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
 	p.setRepeat(ProgRepeat);
 
-	if (railpower != SERVICE)	//time to wait for the relais!
-		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	//if (railpower != SERVICE)	//time to wait for the relais!
+	//	opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	//else opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	
 	setpower(SERVICE, true);
 	current_cv_bit = 0xF0; //verify the byte!
 	current_ack_read = false;
@@ -675,17 +681,19 @@ bool DCCPacketScheduler::opsVerifyDirectCV(uint16_t CV, uint8_t CV_data)
 	current_cv = CV;
 	current_cv_value = CV_data;
 
-	opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-	return ops_programmming_queue.insertPacket(&p);
-	//------opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
+	opsDecoderReset(3);	//send first a Reset Packet
+	ops_programmming_queue.insertPacket(&p);
+	return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 	//return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 }
 
 bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bitSet)
 {
 	//for CV#1 is the Adress 0
-	//long-preamble   0  011110AA  0  AAAAAAAA  0  111KDBBB  0  EEEEEEEE  1 
-	//Bit Manipulation
+	//long-preamble   0  0111CCAA  0  AAAAAAAA  0  111KDBBB  0  EEEEEEEE  1 
+	//CC=10 Bit Manipulation	<--
+	//CC=01 Verify byte		
+	//CC=11 Write byte 
 	//BBB represents the bit position 
 	//D contains the value of the bit to be verified or written
 	//K=1 signifies a "Write Bit" operation and K=0 signifies a "Bit Verify" 
@@ -693,7 +701,7 @@ bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bi
 	//check if CV# is between 0 - 1023
 	if (CV > 1023) {
 		if (notifyCVNack)
-			notifyCVNack();
+			notifyCVNack(CV);
 		return false;
 	}
 	
@@ -701,9 +709,14 @@ bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bi
 		current_cv_bit = 0;
 		bitToRead = 0;
 	}
-	
+	/*
 	if (railpower != SERVICE)	//time to wait for the relais!
 		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	else {
+		if (bitToRead == 0) 
+			opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+	}		
+	*/
 	setpower(SERVICE, true);
 	current_ack_read = false;
 	ack_monitor_time = micros();
@@ -717,17 +730,16 @@ bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bi
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
 	p.setRepeat(ProgRepeat);
 	
-	if (bitToRead == 0) {
-		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-	}
-	
-	return ops_programmming_queue.insertPacket(&p);
+	opsDecoderReset(3);	//send first a Reset Packet
+	ops_programmming_queue.insertPacket(&p);
+	return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 	//--------opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 	//return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 }
 
 
-
+//---------------------------------------------------------------------------------
+//POM - Programming On Main
 bool DCCPacketScheduler::opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_data)
 {
 	//format of packet:
@@ -753,10 +765,13 @@ bool DCCPacketScheduler::opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_
 
 	//return low_priority_queue.insertPacket(&p);	//Standard
 
-	//opsDecoderReset();	//send first a Reset Packet
+	//opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
 	return ops_programmming_queue.insertPacket(&p);
 	//return e_stop_queue.insertPacket(&p);
 }
+
+//---------------------------------------------------------------------------------
+//POM - Programming On Main
 
 bool DCCPacketScheduler::opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t Bit_data)
 {
@@ -783,11 +798,13 @@ bool DCCPacketScheduler::opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t B
 
 	//return low_priority_queue.insertPacket(&p);	//Standard
 
-	//opsDecoderReset();	//send first a Reset Packet
+	//opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
 	return ops_programmming_queue.insertPacket(&p);
 	//return e_stop_queue.insertPacket(&p);
 }
 
+//---------------------------------------------------------------------------------
+//POM - Programming On Main, lesen mittels RAILCOM
 bool DCCPacketScheduler::opsPOMreadCV(uint16_t address, uint16_t CV)
 {
 	//format of packet:
@@ -816,10 +833,12 @@ bool DCCPacketScheduler::opsPOMreadCV(uint16_t address, uint16_t CV)
 	//return e_stop_queue.insertPacket(&p);
 }
 
+//---------------------------------------------------------------------------------
 //broadcast Decoder ResetPacket
-bool DCCPacketScheduler::opsDecoderReset(uint8_t repeat)
+bool DCCPacketScheduler::opsDecoderReset(uint8_t repeat)	//default RSTcRepeat
 {
-	// {preamble} 0 00000000 0	00000000 0 EEEEEEEE	1
+	// {long preamble} 0 00000000 0	00000000 0 EEEEEEEE	1
+	// 1111111111111111111111111 0 00000000 0 00000000 0 00000000 1
 	DCCPacket p(0);	//Adr = 0
 	uint8_t data[] = { 0x00 };
 	p.addData(data, 1);
@@ -880,11 +899,17 @@ void DCCPacketScheduler::setCurrentLoadPin(uint8_t pin) {
 void DCCPacketScheduler::update(void) {
 	//CV read on Prog.Track:
 	if (current_packet_service == true && current_ack_read == false && (micros() - ack_monitor_time >= ACK_TIME_WAIT_TO_MONITOR) ) {
+		
+		#if !defined(ACKBOOSTER)
 		uint16_t current_load_now = analogRead(current_load_pin);	//get current value
 		/*
 		Serial.print(current_load_now);
 		Serial.print(",");
-		*/	
+		Serial.print(analogRead(A8));
+		Serial.print(",");
+		Serial.println(digitalRead(A8));
+		*/
+		
 		//was there a ACK for this packet?	
 		if (current_load_now > ACK_SENCE_VALUE) {	//AREF 1.1 Volt = 200 | AREF 5.0 Volt = 15
 			if (ack_received_now == false) {
@@ -906,19 +931,29 @@ void DCCPacketScheduler::update(void) {
 					Serial.print("-b");
 					Serial.println(current_cv_bit);
 					*/	
+		#endif
+		#if defined(ACKBOOSTER)
+				if (analogRead(current_load_pin) > ACK_SENCE_VALUE) {
+		#endif			
 					current_ack_read = true;
 					if (current_cv_bit <= 7)  //CV read....?
 						bitWrite(current_cv_value,current_cv_bit,1);	//ACK, so bit is 'one'!
 					else {	//return cv value:
-						if (notifyCVVerify)		//Verify the Value to device!
-							notifyCVVerify(current_cv,current_cv_value);
+						if (current_cv_bit == 0xF0) {
+							if (notifyCVVerify)		//Verify the Value to device!
+								notifyCVVerify(current_cv,current_cv_value);
+							
+							current_cv_bit = 0xFF; //clear!
+						}
 						
 						//No Power ON!
-						setpower(ON, true);		//need to switch to accept more programming information
+						//setpower(ON, true);		//need to switch to accept more programming information
 					}
 				}
+		#if !defined(ACKBOOSTER)		
 			}
 		}
+		#endif
 		//ENDE mesure currend load for CV# read
 	}
 	
@@ -933,40 +968,41 @@ void DCCPacketScheduler::update(void) {
 		else {
 
 			if (railpower == SERVICE) {		//if command station was in ops Service Mode, switch power off!
-				if (current_ack_read == false && current_cv_bit > 7) {	//No ACK for the Data!!!
+				if (current_ack_read == false && !(current_cv_bit <= 7) && current_cv_bit != 0xFF) {	//No ACK for the Data!!!
 					if (current_cv_value > 0) { //read only again if there is any response
-						/*
-						Serial.println("wrong!");
-						*/
-						opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-						ops_programmming_queue.readPacket(&p);
+						
+						//Serial.println("wrong!");
 						
 						opsReadDirectCV(current_cv, 0); //read again!!
+						ops_programmming_queue.readPacket(&p);
 					}
 					else {	//Return no ACK while programming
-						if (notifyCVNack)
-							notifyCVNack();
 						
-						setpower(ON, true);	
+						if (notifyCVNack)
+							notifyCVNack(current_cv);
+						current_cv_bit = 0xFF;	//clear
+						setpower(ON, true);		//force to leave Service Mode!
 					}	
 				}
 			}
-			if (current_cv_bit <= 7 && !ops_programmming_queue.notEmpty())	{ //CV read: more bit to read...?
+			if (current_cv_bit <= 7) { // && !ops_programmming_queue.notEmpty())	{ //CV read: more bit to read...?
 				if (current_ack_read == false) 	//no ACK - the bit is zero!
 					bitWrite(current_cv_value,current_cv_bit,0);
 				/*
 				Serial.print(current_cv_bit);					
 				Serial.print("-");	
 				Serial.println(current_ack_read);
-				*/				
+				*/			
 				current_cv_bit++;	//get next bit
 
 				if (current_cv_bit > 7) {  //READY: read all 8 bit of the CV value:
 					current_cv_bit = 0xFF;	//STOP here and reset to default
 					//check if value is correct?
-					opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-					ops_programmming_queue.readPacket(&p);
+					//opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
+					
 					opsVerifyDirectCV(current_cv,current_cv_value); //verify bit read
+					ops_programmming_queue.readPacket(&p);
+					
 					/*
 					Serial.print("read:");
 					Serial.print(current_cv);

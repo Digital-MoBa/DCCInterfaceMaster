@@ -1,5 +1,5 @@
 /*
- * DCC Waveform Generator v5.5
+ * DCC Waveform Generator v5.8
  *
  * Author: Philipp Gahtow digitalmoba@arcor.de
  *		   Don Goodman-Wilson dgoodman@artificial-science.org
@@ -25,6 +25,8 @@
  * Hardware requirements:
  *     * A DCC booster with Data and GND wired to pin configured in setup routine (PIN 6) - BASIC OUTPUT!
  *     * A locomotive/switch with a DCC decoder installed (NMRA).
+ * 
+ * Attention: only can handel CV Direct Bit/Byte Mode
  *
  * change log: 
  * - add a store for active loco, so you can request the actual state
@@ -68,6 +70,10 @@
  * - optimize CV# read with new detection time
  * - add NVS to store EEPROM data on ESP32
  * - add active label to notifyTrnt message
+ * - change CV# read and verify, add ACK Booster LM357
+ * - add CV to notifyCVNack return
+ * - fix reset start packet count
+ * - fix direct programming handle
 	
  */
 
@@ -77,8 +83,14 @@
 #include "DCCPacketQueue.h"
 
 /*******************************************************************/
+#define ACKBOOSTER		//Verstärkung für den ACK Impus beim CV lesen durch LM357
+
 #define ACK_TIME_WAIT_TO_MONITOR 20000	//time in microseconds to wait after packet preparing before to check ACK value
+#if defined(ACKBOOSTER)
+#define ACK_SENCE_VALUE 1000		//Value = 1000 for use with AREF = 1.1 Volt analog Refence Voltage and LM357
+#else
 #define ACK_SENCE_VALUE 60		//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
+#endif
 #define ACK_SENCE_TIME	1500	//time in microseconds that a decoder ACK needs to be long to detect 
 
 
@@ -144,8 +156,8 @@
 #define FUNCTION_REPEAT   3
 #define E_STOP_REPEAT     6
 #define RESET_START_REPEAT	  25	//(default, read fom EEPROM)
-#define RESET_CONT_REPEAT	  12	//(default, read fom EEPROM)
-#define OPS_MODE_PROGRAMMING_REPEAT 12	//(default, read fom EEPROM)
+#define RESET_CONT_REPEAT	  6		//(default, read fom EEPROM)
+#define OPS_MODE_PROGRAMMING_REPEAT 7	//(default, read fom EEPROM)
 #define OTHER_REPEAT      9		//for example accessory paket
 
 //State of Railpower:
@@ -236,13 +248,12 @@ class DCCPacketScheduler
 	bool setBasicAccessoryPos(uint16_t address, bool state, bool activ);
 	bool getBasicAccessoryInfo(uint16_t address);
 	
-	bool opsProgDirectCV(uint16_t CV, uint8_t CV_data);		//using Direct Mode - Write byte
-	bool opsVerifyDirectCV(uint16_t CV, uint8_t CV_data);	//Direct Mode Verify Byte
-	bool opsReadDirectCV(uint16_t CV, uint8_t bitToRead = 0, bool bitSet = true);		//Read Direct Mode Byte
-    bool opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_data);
-	bool opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t Bit_data);
-	bool opsPOMreadCV(uint16_t address, uint16_t CV);
-	bool opsDecoderReset(uint8_t repeat = RESET_START_REPEAT);		//Decoder Reset Packet For all Decoders
+	bool opsProgDirectCV(uint16_t CV, uint8_t CV_data);		//Direct Mode - Write byte
+	bool opsVerifyDirectCV(uint16_t CV, uint8_t CV_data);	//Direct Mode - Verify Byte
+	bool opsReadDirectCV(uint16_t CV, uint8_t bitToRead = 0, bool bitSet = true);	//Direct Mode - Read Bit
+    bool opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_data);			//POM write byte
+	bool opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t Bit_data);		//POM write bit
+	bool opsPOMreadCV(uint16_t address, uint16_t CV);							//POM read
 	
 	void setCurrentLoadPin(uint8_t pin);   //for CV read, to detect ACK
 	
@@ -278,6 +289,8 @@ class DCCPacketScheduler
 	byte ProgRepeat;	//Repaet for Packet Programming
 	byte RSTsRepeat;	//Repaet for Reset start Packet
 	byte RSTcRepeat;	//Repaet for Reset contingue Packet
+	
+	bool opsDecoderReset(uint8_t repeat = RESET_CONT_REPEAT);		//Decoder Reset Packet For all Decoders
 
 	//bool LokStsIsEmpty(byte Slot);	//prüft ob Datenpacket/Slot leer ist?
 	//uint16_t LokStsgetAdr(byte Slot);			//gibt Lokadresse des Slot zurück, wenn 0x0000 dann keine Lok vorhanden
@@ -322,7 +335,7 @@ extern "C" {
 	
 	extern void notifyRailpower(uint8_t state) __attribute__((weak));
 	
-	extern void notifyCVNack() __attribute__((weak));	//no ACK while programming
+	extern void notifyCVNack(uint16_t CV) __attribute__((weak));	//no ACK while programming
 
 #if defined (__cplusplus)
 }
