@@ -22,6 +22,7 @@ modified by Philipp Gahtow 2015-2021 digitalmoba@arcor.de
 * - add Railcom hardware support 
 * - optimize Railcom signal timing
 * - fix bug on ESP32 (https://github.com/crosstool-ng/crosstool-ng/issues/1330)
+* - fix DCC ACK Detection (ACK Booster LM358)
 ===========
 
 
