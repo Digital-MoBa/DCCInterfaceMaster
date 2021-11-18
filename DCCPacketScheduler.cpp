@@ -1019,6 +1019,11 @@ void DCCPacketScheduler::update(void) {
 			}
 			else {
 				
+				if (railpower == SERVICE) {
+					//switch to "normal" Mode!
+					setpower(ON, true);		//force to leave Service Mode!
+				}
+				
 				if (e_stop_queue.notEmpty() && (packet_counter % ONCE_REFRESH_INTERVAL)) {	//if there's an e_stop packet, send it now!
 					e_stop_queue.readPacket(&p); //nothing more to do. e_stop_queue is a repeat_queue, so automatically repeats where necessary.
 				}
