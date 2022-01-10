@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2016-2021 Philipp Gahtow
+* Copyright (C) 2016-2022 Philipp Gahtow
 *
 * DCC Waveform Timer Configuration
 *
@@ -107,10 +107,10 @@ Dauer des Teil-Nullbits: t ≥ 100 µs, normal: 116µs
 /******************************************/
 //ESP32 DCC Signal generation with Timer1
 #elif defined(ESP32)
-#define half_one_count 29  //29usec pulse
-#define one_count 58		// 290 - Calls every 58µs
-#define zero_high_count	100	// 500 - Calls every 100µs
-#define zero_low_count	100	// Calls every 100µs
+#define half_one_count 30  //29usec pulse
+#define one_count 60		// Calls every 58µs
+#define zero_high_count	104	// Calls every 100µs
+#define zero_low_count	104	// Calls every 100µs
 #define DCC_ESP_TIMER_ID	1		//the Timer number from 0 to 3
 #define DCC_ESP_TIMER_PRESCALE	80		//prescale the value of the time divider
 #define DCC_ESP_TIMER_FLAG		true	//flag true to count on the rising edge, false to count on the falling edge

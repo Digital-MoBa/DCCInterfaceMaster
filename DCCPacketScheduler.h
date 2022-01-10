@@ -1,5 +1,5 @@
 /*
- * DCC Waveform Generator v5.8
+ * DCC Waveform Generator v5.9
  *
  * Author: Philipp Gahtow digitalmoba@arcor.de
  *		   Don Goodman-Wilson dgoodman@artificial-science.org
@@ -74,6 +74,8 @@
  * - add CV to notifyCVNack return
  * - fix reset start packet count
  * - fix direct programming handle
+ * - add request for actual RailCom cutout status
+ * - fix ACK Value for ESP8266
 	
  */
 
@@ -83,16 +85,14 @@
 #include "DCCPacketQueue.h"
 
 /*******************************************************************/
-#define ACKBOOSTER		//Verstärkung für den ACK Impus beim CV lesen durch LM357
-
-#define ACK_TIME_WAIT_TO_MONITOR 20000	//time in microseconds to wait after packet preparing before to check ACK value
-#if defined(ACKBOOSTER)
-#define ACK_SENCE_VALUE 1000		//Value = 1000 for use with AREF = 1.1 Volt analog Refence Voltage and LM357
+#if defined(ESP8266) //ESP8266 or WeMos D1 mini
+#define ACK_SENCE_VALUE 20		//WeMos has a voltage divider that we not want to remove!
 #else
-#define ACK_SENCE_VALUE 60		//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
+#define ACK_SENCE_VALUE 100		//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
 #endif
-#define ACK_SENCE_TIME	1500	//time in microseconds that a decoder ACK needs to be long to detect 
 
+#define CV_MAX_TRY_READ 5		//read value again if verify fails
+#define CV_WAIT_AFTER_READ 200	//255 - x = rounds to count after we finish reading until we switch back automatic to Normal Mode
 
 /*******************************************************************/
 //When loco request the first time (new loco), start also to send drive information directly
@@ -106,7 +106,7 @@
 #define SlotMax 255			//Slots für Lokdaten
 #define PERIODIC_REFRESH_QUEUE_SIZE 255
 
-#elif defined (ARDUINO_ESP8266_ESP01) || defined(ARDUINO_ESP8266_WEMOS_D1MINI)
+#elif defined(ESP8266) //ESP8266 or WeMos D1 mini
 // Arduino ESP8266 Board follows
 #define AccessoryMax 4096	//max DCC 2048 Weichen / 8 = 255 byte 
 #define SlotMax 255			//Slots für Lokdaten
@@ -255,10 +255,12 @@ class DCCPacketScheduler
 	bool opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t Bit_data);		//POM write bit
 	bool opsPOMreadCV(uint16_t address, uint16_t CV);							//POM read
 	
-	void setCurrentLoadPin(uint8_t pin);   //for CV read, to detect ACK
+	//void setCurrentLoadPin(uint8_t pin);   //for CV read, to detect ACK
 	
     //to be called periodically within loop()
     void update(void); //checks queues, puts whatever's pending on the rails via global current_packet. easy-peasy
+	
+	bool getRailComStatus(void);	//return the actual RailComStatus on the rails
 	
 	#if defined(GLOBALRAILCOMREADER)
 	// public only for easy access by interrupt handlers
@@ -278,6 +280,8 @@ class DCCPacketScheduler
 	uint8_t TrntFormat;		// The Addressing of BasicAccessory Messages
 	uint8_t DCCdefaultSteps; 	//default Speed Steps
 	volatile byte railpower = 0xFF;				 // actual state of the power that goes to the rails
+	
+	uint16_t BaseVAmpSence = 0;			//Save the level of mA on the Rail for ACK detection
 
 	byte BasicAccessory[AccessoryMax / 8];	//Speicher für Weichenzustände
 	NetLok LokDataUpdate[SlotMax];	//Speicher zu widerholdene Lok Daten
@@ -334,6 +338,8 @@ extern "C" {
 	extern void notifyCVPOMRead(uint16_t CVAdr, uint8_t value) __attribute__((weak));
 	
 	extern void notifyRailpower(uint8_t state) __attribute__((weak));
+	
+	extern uint16_t notifyCurrentSence(void) __attribute__((weak));	 //request the CurrentSence value
 	
 	extern void notifyCVNack(uint16_t CV) __attribute__((weak));	//no ACK while programming
 

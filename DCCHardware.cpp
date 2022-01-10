@@ -122,7 +122,7 @@ static void ICACHE_RAM_ATTR onTimerISR()
 #elif defined (ESP32) 
 static void IRAM_ATTR onTimerISR(void)
 #else
-void DCC_ARM_TC_SIGNAL(void)
+void DCC_ARM_TC_SIGNAL
 #endif
 {
 	#if defined(ESP32)
@@ -280,8 +280,7 @@ void DCC_ARM_TC_SIGNAL(void)
 			}
 			else DCC_state = dos_send_bstart;
 		}
-		  
-		//break; 
+		//break;
 	  }
 	/// long Preamble: producess additional '1's for Service Mode data		
     else if (DCC_state == dos_send_longpreamble) {
@@ -371,7 +370,7 @@ void DCC_ARM_TC_SIGNAL(void)
 		//break;
 	}
 	//} //END SWITCH CASE
-
+	
   }  //END the pin is high.
   
   #if defined(ESP32)

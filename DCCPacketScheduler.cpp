@@ -42,8 +42,8 @@ z21nvsClass EEPROMDCC;
 extern portMUX_TYPE timerMux;	
 #endif
 
+/// Request the next packet for the rails
 extern volatile bool get_next_packet; 
-
 /// The Pin where the DCC Waveform comes out.
 extern uint8_t DCCPin;
 extern uint8_t DCCPin2;
@@ -55,15 +55,14 @@ extern uint8_t current_packet[6];
 extern volatile uint8_t current_packet_service;
 /// How many data uint8_ts in the queued packet?
 extern volatile uint8_t current_packet_size;
+/// current status of railcom
+extern volatile uint8_t RailComActiv;
 
-volatile uint8_t current_load_pin = 0;	//Pin where current loadis detected
 volatile uint8_t current_ack_read = false;	//ack is detected
 volatile uint16_t current_cv = 0;	//cv that we are working on
 volatile uint8_t current_cv_value = 0;	//value that is read
 volatile uint8_t current_cv_bit = 0xFF;	//bit that will be read - 0xFF = ready, nothing to read!
-volatile uint8_t ack_received_now = false;  //ACK is send by the decoder
-volatile long ack_received_time = 0;	//micro time that the ACK start
-volatile long ack_monitor_time = 0;		//time when a ACK packet is prepared!
+volatile uint8_t cv_read_count = 0;		//count number of cv read
 
 #if defined(ESP32)
 extern hw_timer_t * timer;
@@ -637,11 +636,9 @@ bool DCCPacketScheduler::opsProgDirectCV(uint16_t CV, uint8_t CV_data)
 	setpower(SERVICE, true);
 	current_cv_bit = 0xFF; //write the byte!
 	current_ack_read = false;
-	ack_monitor_time = micros();
 	current_cv = CV;
 	current_cv_value = CV_data;
-
-	opsDecoderReset(3);	//send first a Reset Packet
+	opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
 	ops_programmming_queue.insertPacket(&p);
 	//-----opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 	return opsVerifyDirectCV(current_cv,current_cv_value); //verify bit read
@@ -677,13 +674,14 @@ bool DCCPacketScheduler::opsVerifyDirectCV(uint16_t CV, uint8_t CV_data)
 	setpower(SERVICE, true);
 	current_cv_bit = 0xF0; //verify the byte!
 	current_ack_read = false;
-	ack_monitor_time = micros();
 	current_cv = CV;
 	current_cv_value = CV_data;
+	if (notifyCurrentSence) 	//get the Base rail current
+		BaseVAmpSence = notifyCurrentSence();
 
-	opsDecoderReset(3);	//send first a Reset Packet
+	opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
 	ops_programmming_queue.insertPacket(&p);
-	return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
+	return opsDecoderReset(3);	//send a Reset while waiting to finish
 	//return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 }
 
@@ -719,8 +717,9 @@ bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bi
 	*/
 	setpower(SERVICE, true);
 	current_ack_read = false;
-	ack_monitor_time = micros();
 	current_cv = CV;
+	if (notifyCurrentSence) 	//get the Base rail current
+		BaseVAmpSence = notifyCurrentSence();
 	
 	DCCPacket p(((CV >> 8) & B11) | B01111000);
 	uint8_t data[] = { 0x00 , 0x00};
@@ -730,9 +729,9 @@ bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bi
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
 	p.setRepeat(ProgRepeat);
 	
-	opsDecoderReset(3);	//send first a Reset Packet
+	opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
 	ops_programmming_queue.insertPacket(&p);
-	return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
+	return opsDecoderReset(3);	//send a Reset while waiting to finish
 	//--------opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 	//return opsDecoderReset(RSTcRepeat);	//send a Reset while waiting to finish
 }
@@ -752,12 +751,9 @@ bool DCCPacketScheduler::opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_
 		return false;
 
 	DCCPacket p(address);
-	uint8_t data[] = { 0x00, 0x00, 0x00 };
-
+	
 	// split the CV address up among data uint8_ts 0 and 1
-	data[0] = ((CV >> 8) & B11) | B11101100;
-	data[1] = CV & 0xFF;
-	data[2] = CV_data;
+	uint8_t data[] = { ((CV >> 8) & B11) | B11101100, CV & 0xFF, CV_data };
 
 	p.addData(data, 3);
 	p.setKind(pom_mode_programming_kind);
@@ -785,12 +781,8 @@ bool DCCPacketScheduler::opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t B
 		return false;
 
 	DCCPacket p(address);
-	uint8_t data[] = { 0x00, 0x00, 0x00 };
-
 	// split the CV address up among data uint8_ts 0 and 1
-	data[0] = ((CV >> 8) & B11) | B11101000;
-	data[1] = CV & 0xFF;
-	data[2] = Bit_data & 0x0F;
+	uint8_t data[] = { ((CV >> 8) & B11) | B11101000, CV & 0xFF, Bit_data & 0x0F};
 
 	p.addData(data, 3);
 	p.setKind(pom_mode_programming_kind);
@@ -814,12 +806,8 @@ bool DCCPacketScheduler::opsPOMreadCV(uint16_t address, uint16_t CV)
 		return false;
 
 	DCCPacket p(address);
-	uint8_t data[] = { 0x00, 0x00, 0x00 };
-
 	// split the CV address up among data uint8_ts 0 and 1
-	data[0] = ((CV >> 8) & B11) | B11100100;
-	data[1] = CV & 0xFF;
-	data[2] = 0;
+	uint8_t data[] = { ((CV >> 8) & B11) | B11100100, CV & 0xFF, 0x00 };
 
 	p.addData(data, 3);
 	p.setKind(pom_mode_programming_kind);
@@ -887,54 +875,24 @@ bool DCCPacketScheduler::eStop(uint16_t address)
 }
 */
 
-
-//for CV read, to detect ACK
-void DCCPacketScheduler::setCurrentLoadPin(uint8_t pin) {
-	current_load_pin = pin;
-	pinMode(pin, INPUT);
-}
-
 //to be called periodically within loop()
 //checks queues, puts whatever's pending on the rails via global current_packet
 void DCCPacketScheduler::update(void) {
 	//CV read on Prog.Track:
-	if (current_packet_service == true && current_ack_read == false && (micros() - ack_monitor_time >= ACK_TIME_WAIT_TO_MONITOR) ) {
-		
-		#if !defined(ACKBOOSTER)
-		uint16_t current_load_now = analogRead(current_load_pin);	//get current value
-		/*
-		Serial.print(current_load_now);
-		Serial.print(",");
-		Serial.print(analogRead(A8));
-		Serial.print(",");
-		Serial.println(digitalRead(A8));
-		*/
-		
-		//was there a ACK for this packet?	
-		if (current_load_now > ACK_SENCE_VALUE) {	//AREF 1.1 Volt = 200 | AREF 5.0 Volt = 15
-			if (ack_received_now == false) {
-				ack_received_now = true; //we are inside a ACK
-				ack_received_time = micros();
-				
-				//Serial.println();
-			}
+	if (current_packet_service == true && current_ack_read == false) { 
 			
-		}
-		else {	
-			if (ack_received_now == true) {
-				ack_received_now = false;
-				if (micros() - ack_received_time >= ACK_SENCE_TIME) {		//length of ack received?
-					/*
-					Serial.print(micros() - ack_monitor_time);
-					Serial.println("*");
-					Serial.print(micros() - ack_received_time);
-					Serial.print("-b");
-					Serial.println(current_cv_bit);
-					*/	
-		#endif
-		#if defined(ACKBOOSTER)
-				if (analogRead(current_load_pin) > ACK_SENCE_VALUE) {
-		#endif			
+		uint16_t current_load_now = 0;
+		if (notifyCurrentSence) 	//get the Base rail current
+			current_load_now = notifyCurrentSence();
+			/*
+			Serial.print(BaseVAmpSence);
+			Serial.print(",");
+			Serial.println(current_load_now);	
+			*/
+		if ( (BaseVAmpSence < current_load_now) && ((current_load_now - BaseVAmpSence) > ACK_SENCE_VALUE) ){ 
+			
+			//Serial.println("ACK");
+			
 					current_ack_read = true;
 					if (current_cv_bit <= 7)  //CV read....?
 						bitWrite(current_cv_value,current_cv_bit,1);	//ACK, so bit is 'one'!
@@ -942,19 +900,17 @@ void DCCPacketScheduler::update(void) {
 						if (current_cv_bit == 0xF0) {
 							if (notifyCVVerify)		//Verify the Value to device!
 								notifyCVVerify(current_cv,current_cv_value);
-							
+							cv_read_count = CV_WAIT_AFTER_READ;	//wait a bit to switch into normal Mode
 							current_cv_bit = 0xFF; //clear!
 						}
 						
-						//No Power ON!
-						//setpower(ON, true);		//need to switch to accept more programming information
 					}
 				}
-		#if !defined(ACKBOOSTER)		
-			}
-		}
-		#endif
-		//ENDE mesure currend load for CV# read
+	}
+	
+	else if (current_packet_service == true && current_ack_read == false) {
+		if (notifyCurrentSence) 	//get the Base rail current
+			BaseVAmpSence = notifyCurrentSence();
 	}
 	
 	//Get next packet:
@@ -969,15 +925,21 @@ void DCCPacketScheduler::update(void) {
 
 			if (railpower == SERVICE) {		//if command station was in ops Service Mode, switch power off!
 				if (current_ack_read == false && !(current_cv_bit <= 7) && current_cv_bit != 0xFF) {	//No ACK for the Data!!!
-					if (current_cv_value > 0) { //read only again if there is any response
-						
+					if (current_cv_value > 0 && current_cv > 0 && cv_read_count < CV_MAX_TRY_READ) { //read only again if there is any response
+						/*
 						//Serial.println("wrong!");
-						
-						opsReadDirectCV(current_cv, 0); //read again!!
+						Serial.print("again CV#");
+						Serial.print(current_cv+1);
+						Serial.print("-");
+						Serial.println(current_cv_value);
+						*/
+						opsReadDirectCV(current_cv); //read again!!
 						ops_programmming_queue.readPacket(&p);
+						
+						cv_read_count++;		//count times we try to read this cv!
 					}
 					else {	//Return no ACK while programming
-						
+						cv_read_count = CV_WAIT_AFTER_READ;		//wait a bit to switch into normal Mode
 						if (notifyCVNack)
 							notifyCVNack(current_cv);
 						current_cv_bit = 0xFF;	//clear
@@ -992,7 +954,7 @@ void DCCPacketScheduler::update(void) {
 				Serial.print(current_cv_bit);					
 				Serial.print("-");	
 				Serial.println(current_ack_read);
-				*/			
+				*/
 				current_cv_bit++;	//get next bit
 
 				if (current_cv_bit > 7) {  //READY: read all 8 bit of the CV value:
@@ -1020,8 +982,11 @@ void DCCPacketScheduler::update(void) {
 			else {
 				
 				if (railpower == SERVICE) {
+					if (cv_read_count == 0) {
 					//switch to "normal" Mode!
 					setpower(ON, true);		//force to leave Service Mode!
+					}
+					else cv_read_count++;
 				}
 				
 				if (e_stop_queue.notEmpty() && (packet_counter % ONCE_REFRESH_INTERVAL)) {	//if there's an e_stop packet, send it now!
@@ -1067,15 +1032,12 @@ void DCCPacketScheduler::update(void) {
 			current_packet_service = false;
 		}
 		
-		//#if defined(ESP32)
-		//portENTER_CRITICAL_ISR(&timerMux);
-		//#endif
-		//Ready: Next Packet for the ISR!
 		get_next_packet = false;
-		//#if defined(ESP32)
-		//portEXIT_CRITICAL_ISR(&timerMux);
-		//#endif
 	}
+}
+
+bool DCCPacketScheduler::getRailComStatus (void) {
+	return RailComActiv;
 }
 
 /*
