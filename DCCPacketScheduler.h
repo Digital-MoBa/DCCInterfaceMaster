@@ -70,12 +70,12 @@
  * - optimize CV# read with new detection time
  * - add NVS to store EEPROM data on ESP32
  * - add active label to notifyTrnt message
- * - change CV# read and verify, add ACK Booster LM357
  * - add CV to notifyCVNack return
  * - fix reset start packet count
  * - fix direct programming handle
  * - add request for actual RailCom cutout status
  * - fix ACK Value for ESP8266
+ * - fix DCC timing on ESP32
 	
  */
 
@@ -85,13 +85,15 @@
 #include "DCCPacketQueue.h"
 
 /*******************************************************************/
+//#define PROG_DEBUG	//Serial output of Prog Informaton
+
 #if defined(ESP8266) //ESP8266 or WeMos D1 mini
-#define ACK_SENCE_VALUE 20		//WeMos has a voltage divider that we not want to remove!
+#define ACK_SENCE_VALUE 10		//WeMos has a voltage divider that we not want to remove!
 #else
 #define ACK_SENCE_VALUE 100		//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
 #endif
 
-#define CV_MAX_TRY_READ 5		//read value again if verify fails
+#define CV_MAX_TRY_READ 4		//read value again if verify fails
 #define CV_WAIT_AFTER_READ 200	//255 - x = rounds to count after we finish reading until we switch back automatic to Normal Mode
 
 /*******************************************************************/
@@ -106,7 +108,7 @@
 #define SlotMax 255			//Slots für Lokdaten
 #define PERIODIC_REFRESH_QUEUE_SIZE 255
 
-#elif defined(ESP8266) //ESP8266 or WeMos D1 mini
+#elif defined(ESP8266) || defined(ESP32) //ESP8266 or WeMos D1 mini
 // Arduino ESP8266 Board follows
 #define AccessoryMax 4096	//max DCC 2048 Weichen / 8 = 255 byte 
 #define SlotMax 255			//Slots für Lokdaten
@@ -156,8 +158,8 @@
 #define FUNCTION_REPEAT   3
 #define E_STOP_REPEAT     6
 #define RESET_START_REPEAT	  25	//(default, read fom EEPROM)
-#define RESET_CONT_REPEAT	  6		//(default, read fom EEPROM)
-#define OPS_MODE_PROGRAMMING_REPEAT 7	//(default, read fom EEPROM)
+#define RESET_CONT_REPEAT	  10		//(default, read fom EEPROM)
+#define OPS_MODE_PROGRAMMING_REPEAT 10	//(default, read fom EEPROM)
 #define OTHER_REPEAT      9		//for example accessory paket
 
 //State of Railpower:
@@ -229,8 +231,6 @@ class DCCPacketScheduler
     
     //the function methods are NOT stateful; you must specify all functions each time you call one
     //keeping track of function state is the responsibility of the calling program.
-    //bool setFunctions(uint16_t address, uint8_t address_kind, uint8_t F0to4, uint8_t F5to9=0x00, uint8_t F9to12=0x00);
-    //bool setFunctions(uint16_t address, uint8_t address_kind, uint16_t functions);
 	void setLocoFunc(uint16_t address, uint8_t type, uint8_t fkt);
     bool setFunctions0to4(uint16_t address, uint8_t functions);	//- F0 F4 F3 F2 F1
     bool setFunctions5to8(uint16_t address, uint8_t functions);	//- F8 F7 F6 F5
@@ -255,8 +255,6 @@ class DCCPacketScheduler
 	bool opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t Bit_data);		//POM write bit
 	bool opsPOMreadCV(uint16_t address, uint16_t CV);							//POM read
 	
-	//void setCurrentLoadPin(uint8_t pin);   //for CV read, to detect ACK
-	
     //to be called periodically within loop()
     void update(void); //checks queues, puts whatever's pending on the rails via global current_packet. easy-peasy
 	
@@ -274,8 +272,6 @@ class DCCPacketScheduler
 	uint8_t RailComID;		//1. Channel RailCom ID and 2 Bit data
 	uint8_t RailComData;	//next 6 Bit Data
 	#endif
-	//uint8_t RailComDecodeInData(uint8_t in);	//Decode the Received data
-	//uint16_t POMCVAdr;	//Adr that we request a CV value
 	
 	uint8_t TrntFormat;		// The Addressing of BasicAccessory Messages
 	uint8_t DCCdefaultSteps; 	//default Speed Steps
@@ -296,32 +292,14 @@ class DCCPacketScheduler
 	
 	bool opsDecoderReset(uint8_t repeat = RESET_CONT_REPEAT);		//Decoder Reset Packet For all Decoders
 
-	//bool LokStsIsEmpty(byte Slot);	//prüft ob Datenpacket/Slot leer ist?
-	//uint16_t LokStsgetAdr(byte Slot);			//gibt Lokadresse des Slot zurück, wenn 0x0000 dann keine Lok vorhanden
-	//byte getNextSlot(byte Slot);	//gibt nächsten genutzten Slot
-	//void setFree(uint16_t adr);
-  
-  //  void stashAddress(DCCPacket *p); //remember the address to compare with the next packet
-   // void repeatPacket(DCCPacket *p); //insert into the appropriate repeat queue
-    //uint8_t default_speed_steps;
-    //uint16_t last_packet_address;
-  
     uint8_t packet_counter;	//to not repeat only one queue
     
     DCCEmergencyQueue e_stop_queue;		//for accessory and estop only - repeat between periodic!
-//    DCCPacketQueue high_priority_queue;
-//    DCCPacketQueue low_priority_queue;
     DCCRepeatQueue repeat_queue;			//send direct then add to periodic repeat!
 //NEW
 	DCCTemporalQueue periodic_refresh_queue;	//special - never stop repeating the paket!
 
 	DCCEmergencyQueue ops_programmming_queue;		//NEW ops programming - repeat directly!
-    
-    //TODO to be completed later.
-    //DCC_Packet ops_programming_queue[10];
-    
-    //some handy thingers
-    //DCCPacket idle_packet;
 };
 
 //DCCPacketScheduler packet_scheduler;

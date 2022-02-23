@@ -108,7 +108,7 @@ volatile uint8_t current_bit_counter = PREAMBLE_LENGTH; //init to 16 1's for the
 #if defined(DCC_USE_TIMER2)
 uint8_t last_timer = one_count;	//last time set to timer
 #elif defined(ESP8266) || defined(ESP32)
-volatile uint16_t last_timer = one_count;	//last time set to timer
+uint16_t last_timer = one_count;	//last time set to timer
 #endif
 
 volatile uint8_t oldstate = LOW;	//state of the output
@@ -117,10 +117,8 @@ volatile uint8_t RailComActiv = false;
 /// This is the Interrupt Service Routine (ISR) for Timer compare match.
 #if defined(__AVR__)
 ISR(DCC_TMR_SIGNAL)
-#elif defined (ESP8266) 
-static void ICACHE_RAM_ATTR onTimerISR()
-#elif defined (ESP32) 
-static void IRAM_ATTR onTimerISR(void)
+#elif defined (ESP8266) || defined (ESP32) 
+static void IRAM_ATTR onTimerISR()
 #else
 void DCC_ARM_TC_SIGNAL
 #endif

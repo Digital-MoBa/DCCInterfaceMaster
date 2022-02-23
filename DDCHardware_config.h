@@ -92,14 +92,14 @@ Dauer des Teil-Nullbits: t ≥ 100 µs, normal: 116µs
 //TIM_DIV1 = 0   -> 80MHz (80 ticks/us - 104857.588us max)
 //TIM_DIV16 = 1  -> 5MHz (5 ticks/us - 1677721.4us max)
 //TIM_DIV256 = 3 -> 312.5Khz (1 tick = 3.2us - 26843542.4us max)
-#define half_one_count 145  //29usec pulse
-#define one_count 290		// 290 - Calls every 58µs
-#define zero_high_count	501	// 500 - Calls every 100µs
-#define zero_low_count	501	// Calls every 100µs
-#define DCC_ESP_TIMER_DIV 		TIM_DIV16
-#define DCC_ESP_TIMER_SET		TIM_EDGE
-#define DCC_ESP_TIMER_LOOP  	TIM_SINGLE
-#define DCC_TMR_OUTP_ONE_HALF() {timer1_write(half_one_count); last_timer = half_one_count;}	
+#define half_one_count 2280  // 145  //29usec pulse
+#define one_count 4580		 // 290 - Calls every 58µs
+#define zero_high_count	7920 // 500 - Calls every 100µs
+#define zero_low_count	7920 // 500	// Calls every 100µs
+#define DCC_ESP_TIMER_DIV 		 TIM_DIV1
+#define DCC_ESP_TIMER_SET		 TIM_EDGE
+#define DCC_ESP_TIMER_LOOP  	 TIM_SINGLE
+#define DCC_TMR_OUTP_ONE_HALF()  {timer1_write(half_one_count); last_timer = half_one_count;}	
 #define DCC_TMR_OUTP_ONE_COUNT() {timer1_write(one_count); last_timer = one_count;}	
 #define DCC_TMR_OUTP_ZERO_HIGH() {timer1_write(zero_high_count); last_timer = zero_high_count;}    
 #define DCC_TMR_OUTP_ZERO_LOW()  {timer1_write(zero_low_count); last_timer = zero_low_count;}    
@@ -107,14 +107,14 @@ Dauer des Teil-Nullbits: t ≥ 100 µs, normal: 116µs
 /******************************************/
 //ESP32 DCC Signal generation with Timer1
 #elif defined(ESP32)
-#define half_one_count 30  //29usec pulse
-#define one_count 60		// Calls every 58µs
-#define zero_high_count	104	// Calls every 100µs
-#define zero_low_count	104	// Calls every 100µs
-#define DCC_ESP_TIMER_ID	1		//the Timer number from 0 to 3
-#define DCC_ESP_TIMER_PRESCALE	80		//prescale the value of the time divider
-#define DCC_ESP_TIMER_FLAG		true	//flag true to count on the rising edge, false to count on the falling edge
-#define DCC_TMR_OUTP_ONE_HALF() {timerAlarmWrite(timer, half_one_count, true); last_timer = half_one_count;}	
+#define half_one_count 580  //29usec pulse
+#define one_count 960		// Calls every 58µs
+#define zero_high_count	2001	// Calls every 100µs
+#define zero_low_count	2001	// Calls every 100µs
+#define DCC_ESP_TIMER_ID		 1		//the Timer number from 0 to 3
+#define DCC_ESP_TIMER_PRESCALE	 4		//prescale the value of the time divider
+#define DCC_ESP_TIMER_FLAG		 true	//flag true to count on the rising edge, false to count on the falling edge
+#define DCC_TMR_OUTP_ONE_HALF()  {timerAlarmWrite(timer, half_one_count, true); last_timer = half_one_count;}	
 #define DCC_TMR_OUTP_ONE_COUNT() {timerAlarmWrite(timer, one_count, true); last_timer = one_count;}	
 #define DCC_TMR_OUTP_ZERO_HIGH() {timerAlarmWrite(timer, zero_high_count, true); last_timer = zero_high_count;}    
 #define DCC_TMR_OUTP_ZERO_LOW()  {timerAlarmWrite(timer, zero_low_count, true); last_timer = zero_low_count;} 
