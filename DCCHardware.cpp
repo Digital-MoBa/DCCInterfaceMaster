@@ -69,7 +69,12 @@ volatile uint8_t sending_packet_size = 0;
 /// The currently queued packet to be put on the rails. Default is a reset packet.
 volatile uint8_t current_packet[6] = {0,0,0,0,0,0};
 /// is in Service Mode:
-volatile uint8_t current_packet_service = false;	//actual packet is a service mode packet
+volatile uint8_t current_packet_service = 0;	//actual packet is a service mode packet
+// 0 = Normal Packet
+// 255 = Service Mode
+// < 255 = Service Mode Repeat counter
+volatile uint8_t ProgRepeat = 10;	//number of Service Mode Packet repeat
+
 /// How many data uint8_ts in the queued packet?
 volatile uint8_t current_packet_size = 0;
 /// How many uint8_ts remain to be put on the rails?
@@ -256,7 +261,7 @@ void DCC_ARM_TC_SIGNAL
 			DCC_state = dos_send_preamble; //and fall through to dos_send_preamble
 		
 			//29µs (+/-3µs) nach dem Aussenden des Endebits einer DCC-Nachricht schaltet die Zentrale ab!
-			if ((RailCom) && (!current_packet_service)) { //in Service Mode kein RailCom
+			if ((RailCom) && (current_packet_service == 0)) { //in Service Mode kein RailCom
 				RailComActiv = true;	//start railcom cutout within the next circle
 				RailComHalfOneBit = true;		//next Bit has only halve length
 			}
@@ -272,7 +277,7 @@ void DCC_ARM_TC_SIGNAL
 			Serial.print("P");	
 		  #endif		
         if(!--current_bit_counter) {
-			if (current_packet_service == true) { //long Preamble in Service Mode
+			if (current_packet_service > 0) { //long Preamble in Service Mode
 				current_bit_counter = ADD_LONG_PREAMBLE_LENGTH;	//additional '1's
 				DCC_state = dos_send_longpreamble;
 			}
@@ -299,23 +304,41 @@ void DCC_ARM_TC_SIGNAL
 		#endif
 		//check if we have received a next packet to send?
 		if (get_next_packet) {	//ERROR! - We didn't get the next packet until now!
-			//load a default idle packet!
-			sending_packet[0] = 0xFF;
-			sending_packet[1] = 0;
-			sending_packet[2] = 0xFF;
-			sending_packet_size = 3;  //feed to the starting ISR.
+			if (current_packet_service > 0) {
+				//load a default reset packet!
+				sending_packet[0] = 0;
+				sending_packet[1] = 0;
+				sending_packet[2] = 0;
+				sending_packet_size = 3;  //feed to the starting ISR.
+			}
+			else {
+				//load a default idle packet!
+				sending_packet[0] = 0xFF;
+				sending_packet[1] = 0;
+				sending_packet[2] = 0xFF;
+				sending_packet_size = 3;  //feed to the starting ISR.
+			}
 		}
 		//store the current_packet to let time for getting the next one while sending this.
 		else {
-			sending_packet[0] = current_packet[0];
-			sending_packet[1] = current_packet[1];
-			sending_packet[2] = current_packet[2];
-			sending_packet[3] = current_packet[3];
-			sending_packet[4] = current_packet[4];
-			sending_packet[5] = current_packet[5];
-			sending_packet_size = current_packet_size;
+			if ((current_packet_service == 0xFF) || (current_packet_service == 0)) {
+				sending_packet[0] = current_packet[0];
+				sending_packet[1] = current_packet[1];
+				sending_packet[2] = current_packet[2];
+				sending_packet[3] = current_packet[3];
+				sending_packet[4] = current_packet[4];
+				sending_packet[5] = current_packet[5];
+				sending_packet_size = current_packet_size;
+			
+				//need this packet a ACK response?
+				if ((sending_packet[0] >> 4) == B0111) 		//CV read/write packet with ACK response!
+					current_packet_service = 0xFF - ProgRepeat;	//repeat packet timer intern and active ACK read!
+			}
+			else current_packet_service++;	//count of internal Service Mode Packet repeat
 		}
-		get_next_packet = true;
+		if ((current_packet_service == 0) || (current_packet_service == 0xFF)) 
+			get_next_packet = true;	//request the next packet
+		
 		DCC_state = dos_send_uint8_t;
         current_bit_counter = 8;		//reset the counter for bit sending
 		sending_uint8_t_counter	= sending_packet_size;	//reset the counter to the packet_size

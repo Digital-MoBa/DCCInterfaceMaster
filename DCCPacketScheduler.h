@@ -1,5 +1,5 @@
 /*
- * DCC Waveform Generator v5.9
+ * DCC Waveform Generator v6.0.1
  *
  * Author: Philipp Gahtow digitalmoba@arcor.de
  *		   Don Goodman-Wilson dgoodman@artificial-science.org
@@ -7,7 +7,7 @@
  * based on software by Wolfgang Kufer, http://opendcc.de
  *
  * modified by Philipp Gahtow
- * Copyright 2010 digitalmoba@arcor.de, http://pgahtow.de
+ * Copyright 2022 digitalmoba@arcor.de, http://pgahtow.de
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -76,7 +76,9 @@
  * - add request for actual RailCom cutout status
  * - fix ACK Value for ESP8266
  * - fix DCC timing on ESP32
-	
+ * - change ACK detection and add state machine for CV direct	
+ * - add function bit control from F29...F32767
+ * - add function setExtAccessoryPos
  */
 
 #ifndef __DCCCOMMANDSTATION_H__
@@ -88,17 +90,25 @@
 //#define PROG_DEBUG	//Serial output of Prog Informaton
 
 #if defined(ESP8266) //ESP8266 or WeMos D1 mini
-#define ACK_SENCE_VALUE 10		//WeMos has a voltage divider that we not want to remove!
+#define ACK_SENCE_VALUE 10	//WeMos has a voltage divider for 3.1 Volt -> we not want to modify the board!
+#define	ACK_SENCE_DIFF 0	//Differenz beim Konstanten Strom am Gleis (Abweichung +/-)
+#define ACK_SENCE_TIME 2	//Dauer bis ein ACK erkannt wird
 #else
-#define ACK_SENCE_VALUE 100		//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
+#define ACK_SENCE_VALUE 90	//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
+#define	ACK_SENCE_DIFF 33	//Differenz beim Konstanten Strom am Gleis (Abweichung +/-)
+#define ACK_SENCE_TIME 8	//Dauer bis ein ACK erkannt wird
 #endif
 
-#define CV_MAX_TRY_READ 4		//read value again if verify fails
-#define CV_WAIT_AFTER_READ 200	//255 - x = rounds to count after we finish reading until we switch back automatic to Normal Mode
+//read value again if verify fails:
+#define CV_BIT_MAX_TRY_READ 	4	//times to try in Bit-Mode
+#define CV_BYTE_MAX_TRY_READ	1	//times to try in Byte-Mode
 
 /*******************************************************************/
 //When loco request the first time (new loco), start also to send drive information directly
 //#define InitLocoDirect
+
+//Function F29-F68 control
+#define EXTENDFUNCTION		//activate functions over F28
 
 /*******************************************************************/
 //Protokoll can handel max 16384 switch (Weichenzustände max 16384):
@@ -141,25 +151,24 @@
 #endif
 /*******************************************************************/
 
-#define E_STOP_QUEUE_SIZE        15	//old 2
-//#define HIGH_PRIORITY_QUEUE_SIZE    10		//30
-//#define LOW_PRIORITY_QUEUE_SIZE     10		//90
+#define E_STOP_QUEUE_SIZE        15
 #define REPEAT_QUEUE_SIZE        25
-#define PROG_QUEUE_SIZE			 9
+#define PROG_QUEUE_SIZE			 5
 
 //How often a packet is repeat:
 #define ONCE_REFRESH_INTERVAL	4	//send estop, switch, pom each "second" packet
-//#define LOW_PRIORITY_INTERVAL     5
-//#define REPEAT_INTERVAL           11
-//#define PERIODIC_REFRESH_INTERVAL 23
 
 //Repaet for Packetkinds:
 #define SPEED_REPEAT      3
 #define FUNCTION_REPEAT   3
 #define E_STOP_REPEAT     6
 #define RESET_START_REPEAT	  25	//(default, read fom EEPROM)
-#define RESET_CONT_REPEAT	  10		//(default, read fom EEPROM)
-#define OPS_MODE_PROGRAMMING_REPEAT 10	//(default, read fom EEPROM)
+#define RESET_CONT_REPEAT	  6		//(default, read fom EEPROM)
+#if defined(ESP8266) //ESP8266 or WeMos D1 mini
+#define OPS_MODE_PROGRAMMING_REPEAT 18	//(default, read fom EEPROM)
+#else
+#define OPS_MODE_PROGRAMMING_REPEAT 7	//(default, read fom EEPROM)
+#endif
 #define OTHER_REPEAT      9		//for example accessory paket
 
 //State of Railpower:
@@ -180,9 +189,27 @@
 
 //EEPROM Configuration Store:
 #define EEPROMRailCom 50
+#define EEPROMProgReadMode 53	//Auslese-Modus: 0=Nichts, 1=Bit, 2=Byte, 3=Beides
 #define EEPROMRSTsRepeat 60		//RESET_START_REPEAT
 #define EEPROMRSTcRepeat 61		//RESET_CONT_REPEAT
 #define EEPROMProgRepeat 62		//PROGRAMMING_REPEAT
+
+//PROG STATUS States 'ProgState':
+#define ProgStart		0x00
+#define ProgACKRead		0x01
+#define ProgBitRead		0x02	//Bit read
+#define ProgVerifyCV	0x04	//Byte read
+#define ProgWriteByte	0x05	//Byte write
+#define ProgSuccess		0x0F
+#define ProgFail		0xF0
+#define ProgEnde		0xFF
+		
+//PROG Mode Select
+#define ProgModeBit			0x10
+#define ProgModeBitVerify	0x11
+#define ProgModeByte		0x20
+#define ProgModeByteVerify  0x21
+#define ProgModeWriteByte	0x30
 
 typedef struct	//Lokdaten	(Lok Events)
 {
@@ -231,26 +258,34 @@ class DCCPacketScheduler
     
     //the function methods are NOT stateful; you must specify all functions each time you call one
     //keeping track of function state is the responsibility of the calling program.
-	void setLocoFunc(uint16_t address, uint8_t type, uint8_t fkt);
+	void setLocoFunc(uint16_t address, uint8_t type, uint8_t fkt);	//type => 0 = AUS; 1 = EIN; 2 = UM; 3 = error | fkt => 0...68
+	void setLocoFuncBinary(uint16_t address, uint8_t low, uint8_t high);	//Binärzustandsadressen von 29 bis 32767
     bool setFunctions0to4(uint16_t address, uint8_t functions);	//- F0 F4 F3 F2 F1
     bool setFunctions5to8(uint16_t address, uint8_t functions);	//- F8 F7 F6 F5
     bool setFunctions9to12(uint16_t address, uint8_t functions);	//- F12 F11 F10 F9
 	bool setFunctions13to20(uint16_t address, uint8_t functions);	//F20 F19 F18 F17 F16 F15 F14 F13
 	bool setFunctions21to28(uint16_t address, uint8_t functions);	//F28 F27 F26 F25 F24 F23 F22 F21
+	bool setFunctions29to36(uint16_t address, uint8_t functions);	//F29-F36
+	bool setFunctions37to44(uint16_t address, uint8_t functions);	//F37-F44
+	bool setFunctions45to52(uint16_t address, uint8_t functions);	//F45-52
+	bool setFunctions53to60(uint16_t address, uint8_t functions);	//F53-60
+	bool setFunctions61to68(uint16_t address, uint8_t functions);	//F61-68
 
 	byte getFunktion0to4(uint16_t address);	//gibt Funktionszustand - F0 F4 F3 F2 F1 zurück
 	byte getFunktion5to8(uint16_t address);	//gibt Funktionszustand - F8 F7 F6 F5 zurück
 	byte getFunktion9to12(uint16_t address);	//gibt Funktionszustand - F12 F11 F10 F9 zurück
 	byte getFunktion13to20(uint16_t address);	//gibt Funktionszustand F20 - F13 zurück
 	byte getFunktion21to28(uint16_t address);	//gibt Funktionszustand F28 - F21 zurück
+	byte getFunktion29to31(uint16_t address);	//gibt Funktionszustand F31 - F29 zurück
 	
     bool setBasicAccessoryPos(uint16_t address, bool state);
 	bool setBasicAccessoryPos(uint16_t address, bool state, bool activ);
 	bool getBasicAccessoryInfo(uint16_t address);
+	bool setExtAccessoryPos(uint16_t address, uint8_t state);
 	
-	bool opsProgDirectCV(uint16_t CV, uint8_t CV_data);		//Direct Mode - Write byte
-	bool opsVerifyDirectCV(uint16_t CV, uint8_t CV_data);	//Direct Mode - Verify Byte
-	bool opsReadDirectCV(uint16_t CV, uint8_t bitToRead = 0, bool bitSet = true);	//Direct Mode - Read Bit
+	bool opsProgDirectCV(uint16_t CV, uint8_t CV_data);			//Direct Mode - Write byte
+	bool opsVerifyDirectCV(uint16_t CV, uint8_t CV_data);		//Direct Mode - Verify Byte
+	bool opsReadDirectCV(uint16_t CV);	//Direct Mode - Read Bit
     bool opsProgramCV(uint16_t address, uint16_t CV, uint8_t CV_data);			//POM write byte
 	bool opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t Bit_data);		//POM write bit
 	bool opsPOMreadCV(uint16_t address, uint16_t CV);							//POM read
@@ -277,7 +312,8 @@ class DCCPacketScheduler
 	uint8_t DCCdefaultSteps; 	//default Speed Steps
 	volatile byte railpower = 0xFF;				 // actual state of the power that goes to the rails
 	
-	uint16_t BaseVAmpSence = 0;			//Save the level of mA on the Rail for ACK detection
+	uint16_t LASTVAmpSence = 0;			//Save the maximal level of mA on the Rail for ACK detection
+	uint16_t COUNTVAmpSence = 0;		//Count the number of ACK detection 
 
 	byte BasicAccessory[AccessoryMax / 8];	//Speicher für Weichenzustände
 	NetLok LokDataUpdate[SlotMax];	//Speicher zu widerholdene Lok Daten
@@ -286,10 +322,15 @@ class DCCPacketScheduler
 
 	byte slotFullNext;	//if no free slot, override existing slots
 	
-	byte ProgRepeat;	//Repaet for Packet Programming
-	byte RSTsRepeat;	//Repaet for Reset start Packet
-	byte RSTcRepeat;	//Repaet for Reset contingue Packet
+	uint8_t ProgState;	//Direct CV Zustand
+	uint8_t ProgMode;	//Direct CV Modus
+	byte ProgReadMode;	//lese-Modus für Direct CV
+	byte RSTsRepeat;	//Repeat for Reset start Packet
+	byte RSTcRepeat;	//Repeat for Reset contingue Packet
 	
+	void opsWriteCV(uint16_t CV, uint8_t CV_data);		//Direct CV write
+	void opsVerifyCV(uint16_t CV, uint8_t CV_data);		//Direct CV prüfen
+	void opsReadCV(uint16_t CV, uint8_t bitToRead, bool bitState = 1);		//Direct CV lesen
 	bool opsDecoderReset(uint8_t repeat = RESET_CONT_REPEAT);		//Decoder Reset Packet For all Decoders
 
     uint8_t packet_counter;	//to not repeat only one queue
@@ -310,6 +351,7 @@ extern "C" {
 
 	extern void notifyLokAll(uint16_t Adr, uint8_t Steps, uint8_t Speed, uint8_t F0, uint8_t F1, uint8_t F2, uint8_t F3) __attribute__((weak));
 	extern void notifyTrnt(uint16_t Adr, bool State, bool active) __attribute__((weak));
+	extern void notifyExtTrnt(uint16_t Adr, uint8_t) __attribute__((weak));
 	
 	extern void notifyCVVerify(uint16_t CV, uint8_t value) __attribute__((weak));
 	

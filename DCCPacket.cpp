@@ -52,16 +52,17 @@ uint8_t DCCPacket::getBitstream(uint8_t rawbytes[]) //returns size of array.
 	} else if (kind & ACCESSORY_PACKET_KIND_MASK) {
 		if ((kind == basic_accessory_packet_kind) || (kind == extended_accessory_packet_kind)) {
 			// Basic Accessory Packet looks like this:
-			// {preamble} 0 10AAAAAA 0 1AAACDDD 0 EEEEEEEE 1
+			// {preamble} 0 10AAAAAA 0 1AAACAAD 0 EEEEEEEE 1
+			// {preamble} 0 10AAAAAA 0 0AAA0AA1 0 DDDDDDDD 0 EEEEEEEE 1	(extACC)
 			// or this:
 			// {preamble} 0 10AAAAAA 0 1AAACDDD 0 (1110CCVV 0 VVVVVVVV 0 DDDDDDDD) 0 EEEEEEEE 1 (if programming)
 
 			rawbytes[0] = 0x80; //set up address byte 0
-			rawbytes[1] = 0x80; //set up address byte 1
+			if (kind != extended_accessory_packet_kind)		//do not set the bit for extACC
+				rawbytes[1] = 0x80; //set up address byte 1
 
 			rawbytes[0] |= address & 0x03F;
-			rawbytes[1] |= (~(address >> 2) & 0x70)
-					| (data[0] & 0x0F);
+			rawbytes[1] |= (~(address >> 2) & 0x70) | (data[0] & 0x0F);
 
 			//now, add any programming bytes (skipping first data byte, of course)
 			uint8_t i;

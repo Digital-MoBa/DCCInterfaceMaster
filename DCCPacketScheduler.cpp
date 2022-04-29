@@ -53,17 +53,17 @@ extern uint8_t DCCS88Pin;
 extern uint8_t current_packet[6];
 /// is in Service Mode:
 extern volatile uint8_t current_packet_service;
+extern volatile uint8_t ProgRepeat;
 /// How many data uint8_ts in the queued packet?
 extern volatile uint8_t current_packet_size;
 /// current status of railcom
 extern volatile uint8_t RailComActiv;
 
-volatile uint8_t current_ack_read = false;	//ack is detected
 volatile uint16_t current_cv = 0;	//cv that we are working on
 volatile uint8_t current_cv_value = 0;	//value that is read
 volatile uint8_t current_cv_bit = 0xFF;	//bit that will be read - 0xFF = ready, nothing to read!
 uint8_t cv_read_count = 0;		//count number of cv read
-uint8_t cv_wait_power = 0;		//wait to switch back power to ton after PROG																	
+bool current_ack_read = false;
 
 #if defined(ESP32)
 extern hw_timer_t * timer;
@@ -111,6 +111,8 @@ void DCCPacketScheduler::setup(uint8_t pin, uint8_t pin2, uint8_t steps, uint8_t
 	slotFullNext = 0;	//don't override, start with free slots
 	TrntFormat = format;	//The way BasicAccessory Messages Addressing works (Intellbox/ROCO/etc)
 	DCCdefaultSteps = steps;
+	
+	ProgState = ProgStart;	//default Direct CV Zustand
 
 	//Following RP 9.2.4, begin by putting 20 reset packets and 10 idle packets on the rails.
 	//reset packet: address 0x00, data 0x00, XOR 0x00; S 9.2 line 75
@@ -143,7 +145,9 @@ void DCCPacketScheduler::loadEEPROMconfig(void)
 {
 	if (FSTORAGE.read(EEPROMRailCom) > 1)
 		FSTORAGE.FSTORAGEMODE(EEPROMRailCom,0x01);	//Default activ
-	RailCom = FSTORAGE.read(EEPROMRailCom);	//define if railcom cutout is active	
+	
+	if (FSTORAGE.read(EEPROMProgReadMode) > 3)
+		FSTORAGE.FSTORAGEMODE(EEPROMProgReadMode,0x03);	//Default "Beides"
 	
 	if ((FSTORAGE.read(EEPROMProgRepeat) > 64) | (FSTORAGE.read(EEPROMRSTcRepeat) > 64)) {
 		FSTORAGE.FSTORAGEMODE(EEPROMProgRepeat,OPS_MODE_PROGRAMMING_REPEAT);	//range 7-64
@@ -155,6 +159,8 @@ void DCCPacketScheduler::loadEEPROMconfig(void)
 	FSTORAGE.commit();
 	#endif
 	
+	RailCom = FSTORAGE.read(EEPROMRailCom);	//define if railcom cutout is active	
+	ProgReadMode = FSTORAGE.read(EEPROMProgReadMode);	//Auslese-Modus: 0=Nichts, 1=Bit, 2=Byte, 3=Beides
 	ProgRepeat = FSTORAGE.read(EEPROMProgRepeat);	//Repaet for Packet Programming
 	RSTsRepeat = FSTORAGE.read(EEPROMRSTsRepeat);	//Repaet for Reset start Packet
 	RSTcRepeat = FSTORAGE.read(EEPROMRSTcRepeat);	//Repaet for Reset contingue Packet
@@ -393,7 +399,99 @@ void DCCPacketScheduler::setLocoFunc(uint16_t address, uint8_t type, uint8_t fkt
 		//Daten senden:
 		setFunctions21to28(address, funcG5);	//funcG5 = F28 F27 F26 F25 F24 F23 F22 F21
 	}
-	//getLocoStateFull(address, true);	//Alle aktiven Geräte Senden!
+	#if defined(EXTENDFUNCTION)
+	else if ((fkt >= 29) && (fkt <= 36)) {
+		byte func = LokDataUpdate[Slot].f0 >> 5;
+		if (type == 2) //um
+			fktbit = !(bitRead(func, fkt - 29));
+		bitWrite(func, fkt - 29, fktbit);
+		//Daten senden:
+		setFunctions29to36(address, func);	
+	}
+	else if ((fkt >= 37) && (fkt <= 44)) {
+		byte func = 0; //LokDataUpdate[Slot].f5;
+		if (type == 2) //um
+			fktbit = !(bitRead(func, fkt - 37));
+		bitWrite(func, fkt - 37, fktbit);
+		//Daten senden:
+		setFunctions37to44(address, func);	
+	}
+	else if ((fkt >= 45) && (fkt <= 52)) {
+		byte func = 0; //LokDataUpdate[Slot].f6;
+		if (type == 2) //um
+			fktbit = !(bitRead(func, fkt - 45));
+		bitWrite(func, fkt - 45, fktbit);
+		//Daten senden:
+		setFunctions45to52(address, func);	
+	}
+	else if ((fkt >= 53) && (fkt <= 60)) {
+		byte func = 0; //LokDataUpdate[Slot].f7;
+		if (type == 2) //um
+			fktbit = !(bitRead(func, fkt - 53));
+		bitWrite(func, fkt - 53, fktbit);
+		//Daten senden:
+		setFunctions53to60(address, func);	
+	}
+	else if ((fkt >= 61) && (fkt <= 68)) {
+		byte func = 0; //LokDataUpdate[Slot].f8;
+		if (type == 2) //um
+			fktbit = !(bitRead(func, fkt - 61));
+		bitWrite(func, fkt - 61, fktbit);
+		//Daten senden:
+		setFunctions61to68(address, func);	
+	}
+	#endif
+}	
+
+//--------------------------------------------------------------------------------------------
+//Lokfunktion Binary State setzten
+void DCCPacketScheduler::setLocoFuncBinary(uint16_t address, uint8_t low, uint8_t high) {
+	/*	Preamble | 0AAA-AAAA | AAAA-AAAA | 110xxxxx | FLLL LLLL | HHHH HHHH | Err.Det.B
+		F Das oberste Bit F legt fest, ob der Binärzustand eingeschaltet oder ausgeschaltet ist.
+		LLLLLLL Die niederwertigen sieben (!) Bits der Binärzustandsadresse.
+		HHHHHHHH Die die höherwertigen acht Bits der Binärzustandsadresse. 
+		DCC Binärzustandssteuerungsbefehle werden drei Mal am Gleis ausgegeben, 
+		und danach gemäß RCN-212 nicht mehr regelmäßig wiederholt! */
+		
+	if (high == 0) {	//Binärzustandsadressen < 128 ==> kurze Form
+		
+		if ((low & 0x7F) < 29)	//nur Binärzustandsadressen von 29 bis 32767
+			return;
+		
+		//Binärzustandssteuerungsbefehl kurze Form: 1101-1101 DLLL-LLLL
+		DCCPacket p(address);
+		uint8_t data[] = { B11011101, low}; 
+		p.addData(data, 2);
+		p.setKind(function_packet_b_kind);	
+		p.setRepeat(FUNCTION_REPEAT);
+		/*
+		//save:
+		#if defined(EXTENDFUNCTION)
+		if (fkt < 69) {
+			uint8_t bitPos = (fkt - 29) % 8;
+			uint8_t num = (fkt - 29) / 8;
+			switch (num) {
+				case 0: bitWrite(f4, bitPos, fktbit); break; //F36 - F29
+				case 1: bitWrite(f5, bitPos, fktbit); break; //F44 - F37
+				case 2: bitWrite(f6, bitPos, fktbit); break; //F52 - F45
+				case 3: bitWrite(f7, bitPos, fktbit); break; //F60 - F53
+				case 4: bitWrite(f8, bitPos, fktbit); break; //F68 - F61
+			}
+		}
+		#endif
+		*/
+		e_stop_queue.insertPacket(&p);
+	}
+	else { 	//bis max 32767
+		//Binärzustandssteuerungsbefehl lange Form: 1100-0000 DLLL-LLLL HHHH-HHHH
+		DCCPacket p(address);
+		uint8_t data[] = { B11000000, low, high}; 
+		p.addData(data, 3);
+		p.setKind(function_packet_b_kind);	
+		p.setRepeat(FUNCTION_REPEAT);
+		
+		e_stop_queue.insertPacket(&p);
+	}
 }
 
 //---------------------------------------------------------------------------------
@@ -413,9 +511,8 @@ bool DCCPacketScheduler::setFunctions0to4(uint16_t address, uint8_t functions)
   p.setKind(function_packet_1_kind);
   p.setRepeat(FUNCTION_REPEAT);
 
-  LokDataUpdate[LokStsgetSlot(address)].f0 = functions & 0x1F;	//write into register to SAVE
+  LokDataUpdate[LokStsgetSlot(address)].f0 = (functions & 0x1F) | (LokDataUpdate[LokStsgetSlot(address)].f0 & B11100000);	//write into register to SAVE
 
-  //return low_priority_queue.insertPacket(&p);
   return repeat_queue.insertPacket(&p);
 }
 
@@ -435,7 +532,6 @@ bool DCCPacketScheduler::setFunctions5to8(uint16_t address, uint8_t functions)
 
   LokDataUpdate[LokStsgetSlot(address)].f1 = (LokDataUpdate[LokStsgetSlot(address)].f1 | 0x0F) & (functions | 0xF0);	//write into register to SAVE
 
-  //return low_priority_queue.insertPacket(&p);
   return repeat_queue.insertPacket(&p);
 }
 
@@ -456,41 +552,140 @@ bool DCCPacketScheduler::setFunctions9to12(uint16_t address, uint8_t functions)
 
   LokDataUpdate[LokStsgetSlot(address)].f1 = (LokDataUpdate[LokStsgetSlot(address)].f1 | 0xF0) & ((functions << 4) | 0x0F);	//write into register to SAVE
 
-  //return low_priority_queue.insertPacket(&p);
   return repeat_queue.insertPacket(&p);
 }
 
 //---------------------------------------------------------------------------------
 bool DCCPacketScheduler::setFunctions13to20(uint16_t address, uint8_t functions)	//F20 F19 F18 F17 F16 F15 F14 F13
-{
+{	
+	//Funktionssteuerung F13-F20: 1101-1110 DDDD-DDDD
 	if (address == 0)	//check if Adr is ok?
 		return false;
 
 	DCCPacket p(address);
-	uint8_t data[] = { B11011110, 0x00 }; 
-	data[1] = functions;	//significant functions (F20--F13)
+	uint8_t data[] = { B11011110, functions }; 	//significant functions (F20--F13)
 	p.addData(data, 2);
 	p.setKind(function_packet_4_kind);
 	p.setRepeat(FUNCTION_REPEAT);
 	LokDataUpdate[LokStsgetSlot(address)].f2 = functions; //write into register to SAVE
-	//return low_priority_queue.insertPacket(&p);
+
 	return repeat_queue.insertPacket(&p);
 }
 
 //---------------------------------------------------------------------------------
 bool DCCPacketScheduler::setFunctions21to28(uint16_t address, uint8_t functions)	//F28 F27 F26 F25 F24 F23 F22 F21
 {
+	//Funktionssteuerung F21-F28: 1101-1111 DDDD-DDDD
 	if (address == 0)	//check if Adr is ok?
 		return false;
 
 	DCCPacket p(address);
-	uint8_t data[] = { B11011111, 0x00}; 
-	data[1] = functions; //significant functions (F28--F21)
+	uint8_t data[] = { B11011111, functions}; 
 	p.addData(data, 2);
 	p.setKind(function_packet_5_kind);
 	p.setRepeat(FUNCTION_REPEAT);
 	LokDataUpdate[LokStsgetSlot(address)].f3 = functions; //write into register to SAVE
-	//return low_priority_queue.insertPacket(&p);
+
+	return repeat_queue.insertPacket(&p);
+}
+
+//---------------------------------------------------------------------------------
+bool DCCPacketScheduler::setFunctions29to36(uint16_t address, uint8_t functions)	//F29-F36
+{
+	//Funktionssteuerung F29-F36: 1101-1000 DDDD-DDDD
+	if (address == 0)	//check if Adr is ok?
+		return false;
+
+	DCCPacket p(address);
+	uint8_t data[] = { B11011000, functions}; 
+	p.addData(data, 2);
+	p.setKind(function_packet_5_kind);
+	p.setRepeat(FUNCTION_REPEAT);
+	
+	#if defined(EXTENDFUNCTION)
+	LokDataUpdate[LokStsgetSlot(address)].f0 = (functions << 5) | (LokDataUpdate[LokStsgetSlot(address)].f0 & 0x1F); //write into register to SAVE
+	#endif
+
+	return repeat_queue.insertPacket(&p);
+}
+
+//---------------------------------------------------------------------------------
+bool DCCPacketScheduler::setFunctions37to44(uint16_t address, uint8_t functions)	//F37-F44
+{
+	//Funktionssteuerung F37-F44: 1101-1001 DDDD-DDDD
+	if (address == 0)	//check if Adr is ok?
+		return false;
+
+	DCCPacket p(address);
+	uint8_t data[] = { B11011001, functions}; 
+	p.addData(data, 2);
+	p.setKind(function_packet_5_kind);
+	p.setRepeat(FUNCTION_REPEAT);
+	
+	#if defined(EXTENDFUNCTION)
+	//LokDataUpdate[LokStsgetSlot(address)].f5 = functions; //write into register to SAVE
+	#endif
+
+	return repeat_queue.insertPacket(&p);
+}
+
+//---------------------------------------------------------------------------------
+bool DCCPacketScheduler::setFunctions45to52(uint16_t address, uint8_t functions)	//F45-52
+{
+	//Funktionssteuerung F45-F52: 1101-1010 DDDD-DDDD
+	if (address == 0)	//check if Adr is ok?
+		return false;
+
+	DCCPacket p(address);
+	uint8_t data[] = { B11011010, functions}; 
+	p.addData(data, 2);
+	p.setKind(function_packet_5_kind);
+	p.setRepeat(FUNCTION_REPEAT);
+	
+	#if defined(EXTENDFUNCTION)
+	//LokDataUpdate[LokStsgetSlot(address)].f6 = functions; //write into register to SAVE
+	#endif
+
+	return repeat_queue.insertPacket(&p);
+}
+
+//---------------------------------------------------------------------------------
+bool DCCPacketScheduler::setFunctions53to60(uint16_t address, uint8_t functions)	//F53-60
+{
+	//Funktionssteuerung F53-F60: 1101-1011 DDDD-DDDD
+	if (address == 0)	//check if Adr is ok?
+		return false;
+
+	DCCPacket p(address);
+	uint8_t data[] = { B11011011, functions}; 
+	p.addData(data, 2);
+	p.setKind(function_packet_5_kind);
+	p.setRepeat(FUNCTION_REPEAT);
+	
+	#if defined(EXTENDFUNCTION)
+	//LokDataUpdate[LokStsgetSlot(address)].f7 = functions; //write into register to SAVE
+	#endif
+
+	return repeat_queue.insertPacket(&p);
+}
+
+//---------------------------------------------------------------------------------
+bool DCCPacketScheduler::setFunctions61to68(uint16_t address, uint8_t functions)	//F61-68
+{
+	//Funktionssteuerung F61-F68: 1101-1100 DDDD-DDDD
+	if (address == 0)	//check if Adr is ok?
+		return false;
+
+	DCCPacket p(address);
+	uint8_t data[] = { B11011100, functions}; 
+	p.addData(data, 2);
+	p.setKind(function_packet_5_kind);
+	p.setRepeat(FUNCTION_REPEAT);
+	
+	#if defined(EXTENDFUNCTION)
+	//LokDataUpdate[LokStsgetSlot(address)].f8 = functions; //write into register to SAVE
+	#endif
+
 	return repeat_queue.insertPacket(&p);
 }
 
@@ -499,29 +694,30 @@ byte DCCPacketScheduler::getFunktion0to4(uint16_t address)	//gibt Funktionszusta
 {
 	return LokDataUpdate[LokStsgetSlot(address)].f0 & 0x1F;
 }
-
 //---------------------------------------------------------------------------------
 byte DCCPacketScheduler::getFunktion5to8(uint16_t address)	//gibt Funktionszustand - F8 F7 F6 F5 zurück
 {
 	return LokDataUpdate[LokStsgetSlot(address)].f1 & 0x0F;
 }
-
 //---------------------------------------------------------------------------------
 byte DCCPacketScheduler::getFunktion9to12(uint16_t address)	//gibt Funktionszustand - F12 F11 F10 F9 zurück
 {
 	return LokDataUpdate[LokStsgetSlot(address)].f1 >> 4;
 }
-
 //---------------------------------------------------------------------------------
 byte DCCPacketScheduler::getFunktion13to20(uint16_t address)	//gibt Funktionszustand F20 - F13 zurück
 {
 	return LokDataUpdate[LokStsgetSlot(address)].f2;
 }
-
 //---------------------------------------------------------------------------------
 byte DCCPacketScheduler::getFunktion21to28(uint16_t address)	//gibt Funktionszustand F28 - F21 zurück
 {
 	return LokDataUpdate[LokStsgetSlot(address)].f3;
+}
+//---------------------------------------------------------------------------------
+byte DCCPacketScheduler::getFunktion29to31(uint16_t address)	//gibt Funktionszustand F31 - F29 zurück
+{
+	return LokDataUpdate[LokStsgetSlot(address)].f0 >> 5;
 }
 
 //---------------------------------------------------------------------------------
@@ -565,7 +761,7 @@ bool DCCPacketScheduler::setBasicAccessoryPos(uint16_t address, bool state, bool
 
 	DCCPacket p((address + TrntFormat) >> 2); //9-bit Address + Change Format Roco / Intellibox
 	uint8_t data[1];
-	data[0] = ((address + TrntFormat) & 0x03) << 1;	//0000-CDDX
+	data[0] = ((address + TrntFormat) & 0x03) << 1;	//0000-CDDX -> set DD
 	if (state == true)	//SET X Weiche nach links oder nach rechts 
 		bitWrite(data[0], 0, 1);	//set turn
 	if (activ == true )	//SET C Ausgang aktivieren oder deaktivieren 
@@ -580,7 +776,6 @@ bool DCCPacketScheduler::setBasicAccessoryPos(uint16_t address, bool state, bool
 
 	bitWrite(BasicAccessory[address / 8], address % 8, state);	//pro SLOT immer 8 Zustände speichern!
 
-	//return high_priority_queue.insertPacket(&p);
 	return e_stop_queue.insertPacket(&p);
 }
 
@@ -596,18 +791,40 @@ bool DCCPacketScheduler::getBasicAccessoryInfo(uint16_t address)
 }
 
 //---------------------------------------------------------------------------------
+//send an extended accessory message
+bool DCCPacketScheduler::setExtAccessoryPos(uint16_t address, uint8_t state)
+{
+	/*
+	Extended Accessory decoder packet format:
+	================================
+	1111..11 0 1000-0001 0 0111-1011 0 xxxx-xxxx 0 EEEE-EEEE 1
+      Preamble | 10AA-AAAA | 0aaa-0AA1 | DDDD-DDDD | Err.Det.B
+  	*/
+	if (address > 0x7FF)	//check if Adr is ok, (max. 11-bit for Basic Adr)
+		return false;
+
+	DCCPacket p((address + TrntFormat) >> 2); //9-bit Address + Change Format Roco / Intellibox
+	uint8_t data[2];
+	data[0] = (((address + TrntFormat) & 0x03) << 1 | 0x01);	//0000-0AA1
+	data[1] = state;		//DDDD-DDDD
+
+	p.addData(data, 2);
+	p.setKind(extended_accessory_packet_kind);
+	p.setRepeat(OTHER_REPEAT);
+
+	if (notifyExtTrnt)
+		notifyExtTrnt(address, state);
+
+	return e_stop_queue.insertPacket(&p);
+}
+
+//---------------------------------------------------------------------------------
 //Special Function for programming, switch and estop:
 //---------------------------------------------------------------------------------
 //---------------------------------------------------------------------------------
 //write CV byte value
 bool DCCPacketScheduler::opsProgDirectCV(uint16_t CV, uint8_t CV_data)
 {
-	//for CV#1 is the Adress 0
-	//Long-preamble   0  0111CCAA  0  AAAAAAAA  0  DDDDDDDD  0  EEEEEEEE  1 
-	//CC=10 Bit Manipulation
-	//CC=01 Verify byte
-	//CC=11 Write byte 	<--
-	
 	//check if CV# is between 0 - 1023
 	if (CV > 1023) {
 		if (notifyCVNack)
@@ -615,37 +832,40 @@ bool DCCPacketScheduler::opsProgDirectCV(uint16_t CV, uint8_t CV_data)
 		return false;
 	}
 	
+	if (railpower != SERVICE) {	//time to wait for the relais!
+		setpower(SERVICE, true);
+	}
+
+	ProgState = ProgStart;
+	ProgMode = ProgModeWriteByte;
+	current_cv = CV;
+	current_cv_value = CV_data;
+	return true;
+}
+//##################################################################################
+//intern Function!	
+void DCCPacketScheduler::opsWriteCV(uint16_t CV, uint8_t CV_data)
+{
+	//for CV#1 is the Adress 0
+	//Long-preamble   0  0111CCAA  0  AAAAAAAA  0  DDDDDDDD  0  EEEEEEEE  1 
+	//CC=10 Bit Manipulation
+	//CC=01 Verify byte
+	//CC=11 Write byte 	<--
 	DCCPacket p(((CV >> 8) & B11) | B01111100);
 	uint8_t data[] = { 0x00 , 0x00};
 	data[0] = CV & 0xFF;
 	data[1] = CV_data;
 	p.addData(data, 2);
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
-	p.setRepeat(ProgRepeat);
-
-	if (railpower != SERVICE) {	//time to wait for the relais!
-		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-		setpower(SERVICE, true);
-	}
-	current_cv_bit = 0xFF; //write the byte!
-	current_ack_read = false;
-	current_cv = CV;
-	current_cv_value = CV_data;
-	opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
-	ops_programmming_queue.insertPacket(&p);
-	return opsVerifyDirectCV(current_cv,current_cv_value); //verify bit read
+	p.setRepeat(1); //auto repeat inside ISR! (ProgRepeat)
+	
+	ops_programmming_queue.insertPacket(&p);	//send on the rails
 }
 
 //---------------------------------------------------------------------------------
-//verify CV value
+//verify CV value extern Function:
 bool DCCPacketScheduler::opsVerifyDirectCV(uint16_t CV, uint8_t CV_data)
 {
-	//for CV#1 is the Adress 0
-	//Long-preamble   0  0111CCAA  0  AAAAAAAA  0  DDDDDDDD  0  EEEEEEEE  1 
-	//CC=10 Bit Manipulation
-	//CC=01 Verify byte		<--
-	//CC=11 Write byte 
-	
 	//check if CV# is between 0 - 1023
 	if (CV > 1023) {
 		if (notifyCVNack)
@@ -653,33 +873,62 @@ bool DCCPacketScheduler::opsVerifyDirectCV(uint16_t CV, uint8_t CV_data)
 		return false;
 	}
 	
+	if (railpower != SERVICE) {	//time to wait for the relais!
+		setpower(SERVICE, true);
+	}
+	
+	ProgState = ProgStart;
+	ProgMode = ProgModeByteVerify;
+	current_cv = CV;
+	current_cv_value = CV_data;
+	return true;
+}
+//##################################################################################
+//intern Function!	
+void DCCPacketScheduler::opsVerifyCV(uint16_t CV, uint8_t CV_data) 
+{
+	//for CV#1 is the Adress 0
+	//Long-preamble   0  0111CCAA  0  AAAAAAAA  0  DDDDDDDD  0  EEEEEEEE  1 
+	//CC=10 Bit Manipulation
+	//CC=01 Verify byte		<--
+	//CC=11 Write byte 
 	DCCPacket p(((CV >> 8) & B11) | B01110100);
 	uint8_t data[2];
 	data[0]	= CV & 0xFF;
 	data[1] = CV_data;
 	p.addData(data, 2);
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
-	p.setRepeat(ProgRepeat);
+	p.setRepeat(1); //auto repeat inside ISR! (ProgRepeat)
 
-	if (railpower != SERVICE) {	//time to wait for the relais!
-		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-		setpower(SERVICE, true);
-	}
-	current_cv_bit = 0xF0; //verify the byte!
-	current_ack_read = false;
-	current_cv = CV;
-	current_cv_value = CV_data;
-	if (notifyCurrentSence) 	//get the Base rail current
-		BaseVAmpSence = notifyCurrentSence();
-
-	opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
-	return ops_programmming_queue.insertPacket(&p);
+	ops_programmming_queue.insertPacket(&p);	//send on the rails
 }
+//---------------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------------
 //read a CV in bit-Mode
-bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bitSet)
+bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV)
 {
+	//check if CV# is between 0 - 1023
+	if (CV > 1023) {
+		if (notifyCVNack)
+			notifyCVNack(CV);
+		return false;
+	}
+	
+	if (railpower != SERVICE) {	//time to wait for the relais!
+		setpower(SERVICE, true);
+	}
+	ProgState = ProgStart;
+	if (ProgReadMode == 2)
+		ProgMode = ProgModeByte;
+	else ProgMode = ProgModeBit;
+	current_cv = CV;
+	return true;
+}
+//##################################################################################
+//intern Function!	
+void DCCPacketScheduler::opsReadCV(uint16_t CV, uint8_t bitToRead, bool bitState)
+{	
 	//for CV#1 is the Adress 0
 	//long-preamble   0  0111CCAA  0  AAAAAAAA  0  111KDBBB  0  EEEEEEEE  1 
 	//CC=10 Bit Manipulation	<--
@@ -688,46 +937,17 @@ bool DCCPacketScheduler::opsReadDirectCV(uint16_t CV, uint8_t bitToRead, bool bi
 	//BBB represents the bit position 
 	//D contains the value of the bit to be verified or written
 	//K=1 signifies a "Write Bit" operation and K=0 signifies a "Bit Verify" 
-	
-	//check if CV# is between 0 - 1023
-	if (CV > 1023) {
-		if (notifyCVNack)
-			notifyCVNack(CV);
-		return false;
-	}
-	
-	if (current_cv_bit > 7 || bitToRead == 0) {
-		current_cv_bit = 0;
-		bitToRead = 0;
-	}
-
-	if (railpower != SERVICE) {	//time to wait for the relais!
-		opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-		setpower(SERVICE, true);
-	}
-	
-	if (notifyCurrentSence && bitToRead == 0) { 	//get the Base rail current
-		BaseVAmpSence = notifyCurrentSence();
-		#if defined(PROG_DEBUG)
-		Serial.print("Base: ");
-		Serial.println(BaseVAmpSence);	
-		#endif
-	}
-	current_ack_read = false;
-	current_cv = CV;
-	
 	DCCPacket p(((CV >> 8) & B11) | B01111000);
 	uint8_t data[] = { 0x00 , 0x00};
 	data[0] = CV & 0xFF;
-	data[1] = B11100000 | (bitToRead & 0x07) | (bitSet << 3);	//verify Bit is "bitSet"? ("1" or "0")
+	data[1] = B11100000 | (bitToRead & 0x07) | (bitState << 3);	//verify Bit is "bitSet"? ("1" or "0")
 	p.addData(data, 2);
 	p.setKind(ops_mode_programming_kind);	//always use short Adress Mode!
-	p.setRepeat(ProgRepeat);
+	p.setRepeat(1);	//auto repeat inside ISR! (ProgRepeat)
 	
-	opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
-	return ops_programmming_queue.insertPacket(&p);
+	ops_programmming_queue.insertPacket(&p);	//send on the rails
 }
-
+//---------------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------------
 //POM - write CV byte value
@@ -779,7 +999,6 @@ bool DCCPacketScheduler::opsPOMwriteBit(uint16_t address, uint16_t CV, uint8_t B
 
 	//return low_priority_queue.insertPacket(&p);	//Standard
 
-	//opsDecoderReset(RSTcRepeat);	//send first a Reset Packet
 	return ops_programmming_queue.insertPacket(&p);
 	//return e_stop_queue.insertPacket(&p);
 }
@@ -872,44 +1091,19 @@ bool DCCPacketScheduler::eStop(uint16_t address)
 //to be called periodically within loop()
 //checks queues, puts whatever's pending on the rails via global current_packet
 void DCCPacketScheduler::update(void) {
-	//CV read on Prog.Track:
-	if ((current_packet_service == true) && (current_ack_read == false)) { 
-			
-		uint16_t current_load_now = 0;
-		if (notifyCurrentSence) 	//get the Base rail current
-			current_load_now = notifyCurrentSence();
-			
-		#if defined(PROG_DEBUG)
-		//if (BaseVAmpSence < current_load_now) { 
-			Serial.print(current_load_now - BaseVAmpSence);
-			Serial.print(" ");
-		//}
-		#endif
-	
-		if ( (BaseVAmpSence < current_load_now) && ((current_load_now - BaseVAmpSence) > ACK_SENCE_VALUE) ){ 
-			#if defined(PROG_DEBUG)
-			Serial.println("ACK");
-			#endif
-			current_ack_read = true;
-			if (current_cv_bit <= 7)  //CV read....?
-				bitWrite(current_cv_value,current_cv_bit,1);	//ACK, so bit is 'one'!
-			else {	//return cv value:
-				if (current_cv_bit == 0xF0) {
-					if (notifyCVVerify)		//Verify the Value to device!
-						notifyCVVerify(current_cv,current_cv_value);
-					cv_read_count = 0; 	//reset
-					opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-					cv_wait_power = CV_WAIT_AFTER_READ;	//wait a bit to switch into normal Mode
-					current_cv_bit = 0xFF; //clear!
-				}
+	//CV read packet is on Prog.Track:
+	if ((current_packet_service > 0) && (current_packet_service < 0xFF)) {
+		if (notifyCurrentSence) {	//get the Base rail current
+			uint16_t current_load_now = notifyCurrentSence();
+			if ( ( (current_load_now < (LASTVAmpSence + ACK_SENCE_DIFF)) && (current_load_now > (LASTVAmpSence - ACK_SENCE_DIFF)) ) || (current_load_now > (LASTVAmpSence + ACK_SENCE_VALUE)) ) {
+				COUNTVAmpSence++;
+				if (COUNTVAmpSence > ACK_SENCE_TIME) 
+					current_ack_read = true;	//ACK from decoder
 			}
-		}
-	}
-	else if (current_packet_service == true && current_ack_read == false) {
-		if (notifyCurrentSence) 	//get the Base rail current
-			BaseVAmpSence = notifyCurrentSence();
-	}
-	
+			LASTVAmpSence = current_load_now;  //store the last value
+		} //ENDE notify function
+	} //ENDE Service-Mode operation
+
 	//Get next packet:
 	if (get_next_packet) //if the ISR needs a packet:
 	{
@@ -919,118 +1113,212 @@ void DCCPacketScheduler::update(void) {
 			ops_programmming_queue.readPacket(&p);
 		}
 		else {
-
-			if (railpower == SERVICE) {		//if command station was in ops Service Mode, switch power off!
-				if (current_ack_read == false && !(current_cv_bit <= 7) && current_cv_bit != 0xFF) {	//No ACK for the Data!!!
-					if ((current_cv_value > 0 /*&& current_cv > 0*/) && (cv_read_count < CV_MAX_TRY_READ)) { //read only again if there is any response
-						#if defined(PROG_DEBUG)
-						//Serial.println("wrong!");
-						Serial.print(cv_read_count);
-						Serial.print(" again CV#");
-						Serial.print(current_cv+1);
-						Serial.print("-");
-						Serial.println(current_cv_value);
-						#endif
-						opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-						ops_programmming_queue.readPacket(&p);
-						opsReadDirectCV(current_cv); //read again!!
-						cv_read_count++;		//count times we try to read this cv!
-						current_packet_size = p.getBitstream(current_packet); //feed to the starting ISR.
-						return;	//stop here!
+			//--------------------------- Service Mode ------------------------------------------------------------------------------------
+			if (railpower == SERVICE) {
+					switch (ProgState) {
+						case ProgStart: {
+							//choose the Mode!
+							switch (ProgMode) {
+								case ProgModeBit:
+									ProgState = ProgBitRead;
+									current_cv_value = 0;	//cv value that we read
+								break;
+								case ProgModeByte:
+									ProgState = ProgVerifyCV;
+									current_cv_value = 0;	//cv value that we start to read
+								break;
+								case ProgModeByteVerify:
+									ProgState = ProgVerifyCV;	//check cv value
+								break;
+								case ProgModeWriteByte:
+									ProgState = ProgWriteByte;
+								break;
+							}
+							current_cv_bit = 0;		//bit in cv value we are working on
+							cv_read_count = 0;		//counter for try to read data (repeat)
+							LASTVAmpSence = 0;		//reset
+							COUNTVAmpSence = 0;		//reset normal mA level
+							current_packet_service = 0xFF;
+							//Send Start Reset Packets:
+							opsDecoderReset(RSTsRepeat);	//send first a Reset Start Packet
+							ops_programmming_queue.readPacket(&p);
+						break; }
+						case ProgACKRead: {	
+							#if defined(PROG_DEBUG)
+								if (current_ack_read == true)	//ACK from decoder
+									Serial.print("A");
+								else Serial.print("x");
+								if (COUNTVAmpSence < 10)
+									Serial.print("0");
+								Serial.print(COUNTVAmpSence);						
+								Serial.print(" ");	
+							#endif
+							
+							COUNTVAmpSence = 0;	//reset
+							LASTVAmpSence = 0;		//reset last read mA level
+							
+							switch (ProgMode) {
+								case ProgModeBit: 
+									//Check Bit Status
+									if (current_ack_read == true)  //CV read....?
+										bitWrite(current_cv_value,current_cv_bit,1);	//ACK, so bit is 'one'!
+									else bitWrite(current_cv_value,current_cv_bit,0);	//no ACK => 'zero'!	
+									current_cv_bit++;	//get next bit
+									if (current_cv_bit <= 7)
+										ProgState = ProgBitRead;
+									else {
+										#if defined(PROG_DEBUG)
+											Serial.print(current_cv_value);
+											Serial.print(" b");	
+											Serial.print(current_cv_value, BIN);
+											Serial.print("; ");	
+										#endif
+										ProgState = ProgVerifyCV;
+										ProgMode = ProgModeBitVerify;
+									}
+									break;
+								case ProgModeBitVerify: {
+									#if defined(PROG_DEBUG)
+									if (current_ack_read == true)	
+										Serial.println();
+									#endif
+									current_cv_bit = 0;		//reset 
+									ProgMode = ProgModeBit;
+									//Check CV Value
+									if (current_ack_read == true) 
+										ProgState = ProgSuccess;
+									else {
+										//Read again...
+										ProgState = ProgBitRead;
+										cv_read_count++;		//count times we try to read this cv!
+										if (current_cv_value > 0) {		//there was min one ACK
+											if (cv_read_count == CV_BIT_MAX_TRY_READ) {	//check if we should try again?
+												if (ProgReadMode == 3) {	//try both Mode
+													#if defined(PROG_DEBUG)
+													Serial.println("Try Byte-Mode");
+													#endif
+													//------change Mode!!!----------
+													ProgState = ProgStart;	
+													ProgMode = ProgModeByte;
+												}
+												else ProgState = ProgFail;	//byte verify fails!
+											}
+											#if defined(PROG_DEBUG)
+											else {												
+												Serial.print("wrong ");
+												Serial.print(cv_read_count);
+												Serial.println(" again!!!");
+											}
+											#endif
+										}	
+										else ProgState = ProgFail;	//no ACK while reading - "keine Lok gefunden!"
+										current_cv_value = 0;	//reset
+									}
+									break; }
+								case ProgModeByteVerify:
+									if (current_ack_read == true) 
+										ProgState = ProgSuccess;
+									else ProgState = ProgFail;
+									break;
+								case ProgModeByte:
+									//Check Byte Status
+									if (current_ack_read == true) 
+										ProgState = ProgSuccess;
+									else {
+										#if defined(PROG_DEBUG)
+											Serial.print(current_cv_value);
+											Serial.print(" b");	
+											Serial.println(current_cv_value, BIN);
+										#endif
+										current_cv_value++;	//check the next value
+										ProgState = ProgVerifyCV;
+										if (current_cv_value == 0) {	//we are at the end?
+											cv_read_count++;		//count times we try to read this cv!
+											ProgState = ProgStart;	
+											if (cv_read_count == CV_BYTE_MAX_TRY_READ) //check if we should stop to try?
+												ProgState = ProgFail;
+										}
+									}
+									break;
+							}
+							if ((ProgState == ProgSuccess) || (ProgState == ProgFail))
+								opsDecoderReset(RSTsRepeat);	//send Reset start Packet -> wait if we get a next Service Mode packet!
+							else opsDecoderReset(RSTcRepeat);	//send Reset continue Packet
+							ops_programmming_queue.readPacket(&p);
+							current_ack_read = false;		//reset ACK information
+						break; }
+						case ProgBitRead: {
+							//Read CV in Bit-Mode:
+							ProgState = ProgACKRead;
+							opsReadCV(current_cv, current_cv_bit);	//ask for the next bit!
+							ops_programmming_queue.readPacket(&p);
+						break; }
+						case ProgVerifyCV: {
+							//Check CV Value
+							ProgState = ProgACKRead;
+							opsVerifyCV(current_cv,current_cv_value); //verify bit read
+							ops_programmming_queue.readPacket(&p);
+						break; }
+						case ProgWriteByte: {
+							//switch to Verify Mode:
+							ProgState = ProgVerifyCV;
+							ProgMode = ProgModeByteVerify; 
+							//Write Byte into CV:
+							opsWriteCV(current_cv,current_cv_value);
+							ops_programmming_queue.readPacket(&p);
+						break; }
+						case ProgEnde: {
+							//switch to "normal" Mode!
+							setpower(ON, true);		//force to leave Service Mode!
+							current_packet_service = 0;
+							return;	//no new packet here!
+						break; }
 					}
-					else {	//Return no ACK while programming
-						#if defined(PROG_DEBUG)
-						Serial.println(cv_read_count);
-						#endif
-						cv_read_count = 0;	//reset
-						cv_wait_power = CV_WAIT_AFTER_READ;		//wait a bit to switch into normal Mode
+					//-----ACK FINISH-----
+					if (ProgState == ProgSuccess) {	//lesen erfolgreich!
+						//CV lesen erfolgreich
+						if (notifyCVVerify)		//Verify the Value to device!
+							notifyCVVerify(current_cv,current_cv_value);
+						ProgState = ProgEnde;	
+					}
+					if (ProgState == ProgFail) {	//lesen fehlgeschlagen!
+						//Error:
 						if (notifyCVNack)
 							notifyCVNack(current_cv);
-						current_cv_bit = 0xFF;	//clear
-					}	
-				}
-			}
-			if (current_cv_bit <= 7) { // && !ops_programmming_queue.notEmpty())	{ //CV read: more bit to read...?
-				if (current_ack_read == false) 	//no ACK - the bit is zero!
-					bitWrite(current_cv_value,current_cv_bit,0);
-				#if defined(PROG_DEBUG)
-				Serial.print(current_cv_bit);					
-				Serial.print("-");	
-				Serial.println(current_ack_read);
-				#endif
-				current_cv_bit++;	//get next bit
-
-				if (current_cv_bit > 7) {  //READY: read all 8 bit of the CV value:
-					current_cv_bit = 0xFF;	//STOP here and reset to default
-					//check if value is correct?
-					opsDecoderReset(RSTsRepeat);	//send first a Reset Packet
-					ops_programmming_queue.readPacket(&p);
-					opsVerifyDirectCV(current_cv,current_cv_value); //verify bit read
-					#if defined(PROG_DEBUG)
-					Serial.print("read:");
-					Serial.print(current_cv+1);
-					Serial.print(" - ");
-					Serial.println(current_cv_value);
-					#endif
-				}
-				else {	//read next bit:
-					opsReadDirectCV(current_cv, current_cv_bit);	//ask for the next bit!
-					ops_programmming_queue.readPacket(&p);
-				}
-			}
-			else {
-				//check if we are running normal?
-				if (railpower == SERVICE) {
-					if (cv_wait_power == 0) {
-						//switch to "normal" Mode!
-						setpower(ON, true);		//force to leave Service Mode!
-						cv_read_count = 0;	//reset
+						ProgState = ProgEnde;	
 					}
-					else cv_wait_power++;
-				}
-				
-				if (e_stop_queue.notEmpty() && (packet_counter % ONCE_REFRESH_INTERVAL)) {	//if there's an e_stop packet, send it now!
-					e_stop_queue.readPacket(&p); //nothing more to do. e_stop_queue is a repeat_queue, so automatically repeats where necessary.
-				}
+			}	//ENDE Service-Mode
+			//--------------------------- Normal Packet Mode ------------------------------------------------------------------------------------
 				else {
-					if (repeat_queue.notEmpty()) {	//for each packet to send it fast, before it stay long waiting in periodic!
-						repeat_queue.readPacket(&p);
-						periodic_refresh_queue.insertPacket(&p);
+					current_packet_service = 0;
+					if (e_stop_queue.notEmpty() && (packet_counter % ONCE_REFRESH_INTERVAL)) {	//if there's an e_stop packet, send it now!
+						e_stop_queue.readPacket(&p); //nothing more to do. e_stop_queue is a repeat_queue, so automatically repeats where necessary.
 					}
 					else {
-						//	if (periodic_refresh_queue.notEmpty()) // && periodic_refresh_queue.notRepeat(last_packet_address))
-						if (railpower != ESTOP)
-							periodic_refresh_queue.readPacket(&p);
+						if (repeat_queue.notEmpty()) {	//for each packet to send it fast, before it stay long waiting in periodic!
+							repeat_queue.readPacket(&p);
+							periodic_refresh_queue.insertPacket(&p);
+						}
+						else {
+							//	if (periodic_refresh_queue.notEmpty()) // && periodic_refresh_queue.notRepeat(last_packet_address))
+							if (railpower != ESTOP)
+								periodic_refresh_queue.readPacket(&p);
+							else {
+								//try again:
+								if (e_stop_queue.notEmpty())
+									e_stop_queue.readPacket(&p); 
+								else return; //no data to send!
+							}
+						}
+						/*if (p.getKind() == speed_packet_kind && railpower == ESTOP) {
+							e_stop_queue.readPacket(&p);
+						}*/
 					}
-					/*if (p.getKind() == speed_packet_kind && railpower == ESTOP) {
-						e_stop_queue.readPacket(&p);
-					}*/
 				}
-			}	//read CV by bit
 		}
 		++packet_counter;	//to not repeat only one queue!
 		//last_packet_address = p.getAddress(); //remember the address to compare with the next packet
 		current_packet_size = p.getBitstream(current_packet); //feed to the starting ISR.
-		
-		/*
-		if (p.getAddress() != 255) {	
-			Serial.print(p.getAddress());		
-			Serial.print("-");
-			for (byte v = 0; v < current_packet_size; v++) {
-				for (byte c = 0; c < 8; c++)
-					Serial.print(bitRead(current_packet[v],7-c), BIN);
-				Serial.print(" ");
-			}
-			Serial.println(current_packet_size);
-		}
-		*/
-		
-		if (railpower == SERVICE) {
-			current_packet_service = true;
-		}
-		else {
-			current_packet_service = false;
-		}
 		
 		get_next_packet = false;
 	}
@@ -1045,14 +1333,14 @@ bool DCCPacketScheduler::getRailComStatus (void) {
 //aktuellen Zustand aller Funktionen und Speed der Lok
 void DCCPacketScheduler::getLocoData(uint16_t adr, uint8_t data[])
 {
-	//uint8_t Steps, uint8_t Speed, uint8_t F0, uint8_t F1, uint8_t F2, uint8_t F3
+	//uint8_t Steps, uint8_t Speed, uint8_t F0, uint8_t F1, uint8_t F2, uint8_t F3		==> F0 bis F31
 	byte Slot = LokStsgetSlot(adr);
 	data[0] = LokDataUpdate[Slot].adr >> 14; 	//Steps
 	data[1] = LokDataUpdate[Slot].speed;
-	data[2] = LokDataUpdate[Slot].f0 & 0x1F;	//F0 - F4
-	data[3] = LokDataUpdate[Slot].f1;
-	data[4] = LokDataUpdate[Slot].f2;
-	data[5] = LokDataUpdate[Slot].f3;
+	data[2] = LokDataUpdate[Slot].f0;	//F31 F30 F29 F0 - F4 F3 F2 F1
+	data[3] = LokDataUpdate[Slot].f1;	//F12 - F5
+	data[4] = LokDataUpdate[Slot].f2;	//F20 - F13
+	data[5] = LokDataUpdate[Slot].f3;	//F28 - F21
 }
 
 //--------------------------------------------------------------------------------------------
@@ -1101,7 +1389,7 @@ void DCCPacketScheduler::LokStsSetNew(byte Slot, uint16_t adr)	//Neue Lok eintra
 	LokDataUpdate[Slot].f1 = 0x00;
 	LokDataUpdate[Slot].f2 = 0x00;
 	LokDataUpdate[Slot].f3 = 0x00;
-	
+
 	//generate first drive information:
 	#if defined(InitLocoDirect)
 	setSpeed(LokDataUpdate[Slot].adr, LokDataUpdate[Slot].speed); 

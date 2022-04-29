@@ -28,6 +28,7 @@ typedef unsigned char uint8_t;
 #define function_packet_3_kind      0x15
 #define function_packet_4_kind      0x19
 #define function_packet_5_kind      0x1A
+#define function_packet_b_kind      0x1B
 #define accessory_packet_kind       0x16
 #define reset_packet_kind           0x17
 #define ops_mode_programming_kind   0x18	//always use short Address Mode!
