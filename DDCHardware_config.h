@@ -92,8 +92,8 @@ Dauer des Teil-Nullbits: t ≥ 100 µs, normal: 116µs
 //TIM_DIV1 = 0   -> 80MHz (80 ticks/us - 104857.588us max)
 //TIM_DIV16 = 1  -> 5MHz (5 ticks/us - 1677721.4us max)
 //TIM_DIV256 = 3 -> 312.5Khz (1 tick = 3.2us - 26843542.4us max)
-#define half_one_count 2080  // 145  //29usec pulse		2280
-#define one_count 4160		 // 290 - Calls every 58µs  4580
+#define half_one_count 2080  // 145  //29usec pulse		old:2280 new:2080
+#define one_count 4160		 // 290 - Calls every 58µs  old:4580 new:4160
 #define zero_high_count	7920 // 500 - Calls every 100µs
 #define zero_low_count	7920 // 500	// Calls every 100µs
 #define DCC_ESP_TIMER_DIV 		 TIM_DIV1

@@ -63,7 +63,15 @@ volatile uint16_t current_cv = 0;	//cv that we are working on
 volatile uint8_t current_cv_value = 0;	//value that is read
 volatile uint8_t current_cv_bit = 0xFF;	//bit that will be read - 0xFF = ready, nothing to read!
 uint8_t cv_read_count = 0;		//count number of cv read
-bool current_ack_read = false;
+
+#define NON_PROG_OP 		0x00
+#define WAIT_FOR_ACK		0x01
+#define ACK_DETECTED		0x02
+#define ACK_READ_SUCCESS 	0x10
+#define ACK_READ_FAIL		0xFF
+uint8_t current_ack_status = NON_PROG_OP;
+ //current_ack_read = false;
+unsigned long ack_start_time = 0;
 
 #if defined(ESP32)
 extern hw_timer_t * timer;
@@ -1095,12 +1103,46 @@ void DCCPacketScheduler::update(void) {
 	if ((current_packet_service > 0) && (current_packet_service < 0xFF)) {
 		if (notifyCurrentSence) {	//get the Base rail current
 			uint16_t current_load_now = notifyCurrentSence();
-			if ( ( (current_load_now < (LASTVAmpSence + ACK_SENCE_DIFF)) && (current_load_now > (LASTVAmpSence - ACK_SENCE_DIFF)) ) || (current_load_now > (LASTVAmpSence + ACK_SENCE_VALUE)) ) {
-				COUNTVAmpSence++;
-				if (COUNTVAmpSence > ACK_SENCE_TIME) 
-					current_ack_read = true;	//ACK from decoder
+			
+			if (current_packet_service == (0xFF - ProgRepeat)) {	//first packet - base current!
+				//get base current voltage:
+				if (current_ack_status != WAIT_FOR_ACK) {
+					LASTVAmpSence = current_load_now;  //store the last value
+					current_ack_status = WAIT_FOR_ACK;
+					#if defined(PROG_DEBUG)
+					Serial.print(current_load_now);
+					Serial.print(":");	
+					#endif
+				}
 			}
-			LASTVAmpSence = current_load_now;  //store the last value
+			else {
+				//current load detect:
+				if ((current_load_now > (LASTVAmpSence + ACK_SENCE_VALUE))) {
+					if (current_ack_status == WAIT_FOR_ACK) {
+						current_ack_status = ACK_DETECTED;
+						ack_start_time = micros();
+							#if defined(PROG_DEBUG)
+							Serial.print(current_load_now);	
+							Serial.print(";");
+							#endif
+						
+					}
+				}
+				else {
+					if (current_ack_status == ACK_DETECTED) {
+						if ( ((micros() - ack_start_time) / 1000) >= ACK_SENCE_MIN) { 
+							if ( ((micros() - ack_start_time) / 1000) <= ACK_SENCE_MAX) {	//sec.
+								current_ack_status = ACK_READ_SUCCESS;
+							}
+							else current_ack_status = ACK_READ_FAIL;
+						}
+						else current_ack_status = WAIT_FOR_ACK;	
+					#if defined(PROG_DEBUG)
+						Serial.print((micros() - ack_start_time) / 1000);
+					#endif
+					}
+				}
+			}
 		} //ENDE notify function
 	} //ENDE Service-Mode operation
 
@@ -1142,10 +1184,11 @@ void DCCPacketScheduler::update(void) {
 							//Send Start Reset Packets:
 							opsDecoderReset(RSTsRepeat);	//send first a Reset Start Packet
 							ops_programmming_queue.readPacket(&p);
+							ack_start_time = micros();
 						break; }
 						case ProgACKRead: {	
 							#if defined(PROG_DEBUG)
-								if (current_ack_read == true)	//ACK from decoder
+								if (current_ack_status == ACK_READ_SUCCESS)	//ACK from decoder
 									Serial.print("A");
 								else Serial.print("x");
 								if (COUNTVAmpSence < 10)
@@ -1160,7 +1203,7 @@ void DCCPacketScheduler::update(void) {
 							switch (ProgMode) {
 								case ProgModeBit: 
 									//Check Bit Status
-									if (current_ack_read == true)  //CV read....?
+									if (current_ack_status == ACK_READ_SUCCESS)  //CV read....?
 										bitWrite(current_cv_value,current_cv_bit,1);	//ACK, so bit is 'one'!
 									else bitWrite(current_cv_value,current_cv_bit,0);	//no ACK => 'zero'!	
 									current_cv_bit++;	//get next bit
@@ -1179,13 +1222,13 @@ void DCCPacketScheduler::update(void) {
 									break;
 								case ProgModeBitVerify: {
 									#if defined(PROG_DEBUG)
-									if (current_ack_read == true)	
+									if (current_ack_status == ACK_READ_SUCCESS)	
 										Serial.println();
 									#endif
 									current_cv_bit = 0;		//reset 
 									ProgMode = ProgModeBit;
 									//Check CV Value
-									if (current_ack_read == true) 
+									if (current_ack_status == ACK_READ_SUCCESS) 
 										ProgState = ProgSuccess;
 									else {
 										//Read again...
@@ -1216,13 +1259,13 @@ void DCCPacketScheduler::update(void) {
 									}
 									break; }
 								case ProgModeByteVerify:
-									if (current_ack_read == true) 
+									if (current_ack_status == ACK_READ_SUCCESS) 
 										ProgState = ProgSuccess;
 									else ProgState = ProgFail;
 									break;
 								case ProgModeByte:
 									//Check Byte Status
-									if (current_ack_read == true) 
+									if (current_ack_status == ACK_READ_SUCCESS) 
 										ProgState = ProgSuccess;
 									else {
 										#if defined(PROG_DEBUG)
@@ -1245,7 +1288,7 @@ void DCCPacketScheduler::update(void) {
 								opsDecoderReset(RSTsRepeat);	//send Reset start Packet -> wait if we get a next Service Mode packet!
 							else opsDecoderReset(RSTcRepeat);	//send Reset continue Packet
 							ops_programmming_queue.readPacket(&p);
-							current_ack_read = false;		//reset ACK information
+							current_ack_status = NON_PROG_OP;		//reset ACK information
 						break; }
 						case ProgBitRead: {
 							//Read CV in Bit-Mode:

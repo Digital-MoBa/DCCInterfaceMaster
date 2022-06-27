@@ -1,5 +1,5 @@
 /*
- * DCC Waveform Generator v6.0.1
+ * DCC Waveform Generator v6.1.0
  *
  * Author: Philipp Gahtow digitalmoba@arcor.de
  *		   Don Goodman-Wilson dgoodman@artificial-science.org
@@ -79,6 +79,7 @@
  * - change ACK detection and add state machine for CV direct	
  * - add function bit control from F29...F32767
  * - add function setExtAccessoryPos
+ * - add timing to ACK detection
  */
 
 #ifndef __DCCCOMMANDSTATION_H__
@@ -90,14 +91,13 @@
 //#define PROG_DEBUG	//Serial output of Prog Informaton
 
 #if defined(ESP8266) //ESP8266 or WeMos D1 mini
-#define ACK_SENCE_VALUE 10	//WeMos has a voltage divider for 3.1 Volt -> we not want to modify the board!
-#define	ACK_SENCE_DIFF 0	//Differenz beim Konstanten Strom am Gleis (Abweichung +/-)
-#define ACK_SENCE_TIME 2	//Dauer bis ein ACK erkannt wird
+#define ACK_SENCE_VALUE 4		//WeMos has a voltage divider for 3.1 Volt -> we not want to modify the board!
 #else
-#define ACK_SENCE_VALUE 90	//Value = 200 for use with AREF = 1.1 Volt analog Refence Voltage; (Value = 15 for AREF = 5.0 Volt)
-#define	ACK_SENCE_DIFF 33	//Differenz beim Konstanten Strom am Gleis (Abweichung +/-)
-#define ACK_SENCE_TIME 8	//Dauer bis ein ACK erkannt wird
+#define ACK_SENCE_VALUE 30 		//value difference
 #endif
+
+#define	ACK_SENCE_MIN 3			//min ACK length in ms
+#define ACK_SENCE_MAX 14 		//max ACK length in ms
 
 //read value again if verify fails:
 #define CV_BIT_MAX_TRY_READ 	4	//times to try in Bit-Mode
